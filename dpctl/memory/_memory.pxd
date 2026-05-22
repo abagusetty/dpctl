@@ -22,7 +22,12 @@ in dpctl.memory._memory.pyx.
 
 """
 
-from .._backend cimport DPCTLSyclQueueRef, DPCTLSyclUSMRef, _usm_type
+from .._backend cimport (
+    DPCTLSyclMemoryPoolRef,
+    DPCTLSyclQueueRef,
+    DPCTLSyclUSMRef,
+    _usm_type,
+)
 from .._sycl_context cimport SyclContext
 from .._sycl_device cimport SyclDevice
 from .._sycl_queue cimport SyclQueue
@@ -38,10 +43,25 @@ cdef public api class _Memory [object Py_MemoryObject, type Py_MemoryType]:
     cdef Py_ssize_t nbytes
     cdef SyclQueue queue
     cdef object refobj
+    # When non-NULL, ``__dealloc__`` invokes this callback (via
+    # ``PoolReturnCallback_Invoke``) to release the underlying allocation
+    # back to a user-installed pool instead of running the default
+    # ``OpaqueSmartPtr_Delete`` path. Set by allocator hooks (see
+    # ``dpctl.memory.set_allocator``); left NULL on the legacy path so
+    # behavior is bit-for-bit unchanged when no allocator is installed.
+    cdef void* _pool_return_cb
+    # Optional Python reference keeping the owning ``MemoryPool`` alive
+    # for as long as this allocation exists. Pure bookkeeping; ``None``
+    # on the legacy path.
+    cdef object _pool_owner
 
     cdef _cinit_empty(self)
     cdef _cinit_alloc(self, Py_ssize_t alignment, Py_ssize_t nbytes,
                       bytes ptr_type, SyclQueue queue)
+    cdef _cinit_from_pool(self, Py_ssize_t nbytes, SyclQueue queue,
+                          object pool_owner,
+                          DPCTLSyclMemoryPoolRef pool_ref,
+                          DPCTLSyclUSMRef usm_ptr)
     cdef _cinit_other(self, object other)
     cdef _getbuffer(self, Py_buffer *buffer, int flags)
 
