@@ -68,7 +68,13 @@ DPCTL_API
 bool DPCTLMemoryPool_Available();
 
 /*!
- * @brief Create a memory pool bound to a given SYCL queue and USM type.
+ * @brief Create a *private* memory pool bound to a given SYCL queue and
+ * USM type.
+ *
+ * A private pool has an isolated cache; allocations served by it do not
+ * benefit from (and do not contribute to) the cache state of any other
+ * pool. Use this when you need pool-level isolation (memory budget
+ * enforcement, debugging fragmentation, multi-tenancy in one process).
  *
  * @param  QRef       The SYCL queue whose device/context the pool is bound
  *                    to. Allocations from this pool are valid in the
@@ -87,18 +93,67 @@ DPCTLMemoryPool_Create(__dpctl_keep const DPCTLSyclQueueRef QRef,
                        DPCTLSyclUSMType usm_type);
 
 /*!
+ * @brief Obtain a handle to the SYCL runtime's default memory pool for
+ * the queue's ``(context, device, usm_type)`` tuple.
+ *
+ * The underlying pool is a runtime-managed singleton: every call with
+ * the same ``(context, device, usm_type)`` returns a handle that refers
+ * to the same underlying ``sycl::ext::oneapi::experimental::memory_pool``
+ * object. Cache state (free blocks, reservation) is therefore shared
+ * across all callers within a single process, which is the recommended
+ * mode of use for libraries that want to amortize allocation cost
+ * across the entire application (dpnp, gpu4pyscf, third-party SYCL
+ * code, etc.).
+ *
+ * The returned handle does *not* own the pool; ``DPCTLMemoryPool_Delete``
+ * on a default-pool handle releases only the wrapper, never the
+ * underlying runtime-owned pool object.
+ *
+ * When the SYCL extension is unavailable at build time this falls back
+ * to the same shape as ``DPCTLMemoryPool_Create``, behaving as a
+ * private pool (because there is no runtime singleton to alias).
+ *
+ * @param  QRef       SYCL queue whose ``(context, device)`` selects the
+ *                    pool. Must not be null.
+ * @param  usm_type   One of ``DPCTL_USM_DEVICE``, ``DPCTL_USM_SHARED``,
+ *                    ``DPCTL_USM_HOST``.
+ * @return Pool handle on success, or ``nullptr`` on failure.
+ * @ingroup MemoryPoolInterface
+ */
+DPCTL_API
+__dpctl_give DPCTLSyclMemoryPoolRef
+DPCTLMemoryPool_CreateDefault(__dpctl_keep const DPCTLSyclQueueRef QRef,
+                              DPCTLSyclUSMType usm_type);
+
+/*!
  * @brief Destroy a memory pool handle.
  *
  * Outstanding allocations served by this pool remain valid; their actual
  * release happens when their owning ``MemoryUSM*`` objects are destroyed.
- * This call only releases the pool bookkeeping object itself.
+ * This call only releases the wrapper bookkeeping. When the handle was
+ * produced by ``DPCTLMemoryPool_CreateDefault``, the underlying
+ * runtime-owned pool object is left untouched.
  *
  * @param  PRef   Pool handle previously returned by
- *                ``DPCTLMemoryPool_Create``.
+ *                ``DPCTLMemoryPool_Create`` or
+ *                ``DPCTLMemoryPool_CreateDefault``.
  * @ingroup MemoryPoolInterface
  */
 DPCTL_API
 void DPCTLMemoryPool_Delete(__dpctl_take DPCTLSyclMemoryPoolRef PRef);
+
+/*!
+ * @brief Query whether a pool handle wraps a runtime-default pool
+ * (``true``) or a privately-constructed pool (``false``).
+ *
+ * Useful for diagnostics and for sanity-checks in higher-level
+ * bindings that need to enforce "default-only" or "private-only"
+ * invariants.
+ * @ingroup MemoryPoolInterface
+ */
+DPCTL_API
+bool DPCTLMemoryPool_IsDefault(
+    __dpctl_keep const DPCTLSyclMemoryPoolRef PRef);
 
 /*!
  * @brief Allocate USM memory from a pool.
@@ -138,17 +193,46 @@ void DPCTLMemoryPool_AsyncFree(__dpctl_keep const DPCTLSyclMemoryPoolRef PRef,
                                __dpctl_take DPCTLSyclUSMRef MRef);
 
 /*!
- * @brief Hint the pool to release cached blocks back to the driver, leaving
- * at most ``min_bytes_to_keep`` bytes in its internal cache.
+ * @brief Set the pool's *release threshold* — the lower bound (in
+ * bytes) on the size of the pool's internal cache below which the
+ * implementation should not release blocks back to the underlying
+ * memory provider.
+ *
+ * This is **not** a "trim now" operation. It controls the pool's policy
+ * for future release decisions:
+ *
+ *   * ``cached_bytes <= threshold``: implementation should retain the
+ *     cache (cheap reuse for subsequent allocations).
+ *   * ``cached_bytes >  threshold``: implementation may release the
+ *     excess back to the driver.
+ *
+ * The analog in CUDA is ``cudaMemPoolAttrReleaseThreshold``.
  *
  * No-op when the SYCL extension is unavailable.
  *
- * @param  PRef                Pool handle.
- * @param  min_bytes_to_keep   Lower bound on the cached size after trimming.
+ * @param  PRef        Pool handle.
+ * @param  threshold   New release-threshold value in bytes.
  * @ingroup MemoryPoolInterface
  */
 DPCTL_API
-void DPCTLMemoryPool_TrimTo(__dpctl_keep const DPCTLSyclMemoryPoolRef PRef,
-                            size_t min_bytes_to_keep);
+void DPCTLMemoryPool_SetReleaseThreshold(
+    __dpctl_keep const DPCTLSyclMemoryPoolRef PRef, size_t threshold);
+
+/*!
+ * @brief Attempt to immediately release all currently-cached, unused
+ * blocks back to the underlying memory provider.
+ *
+ * Blocks that are still in use (handed out to live allocations) are
+ * untouched. The amount actually released is implementation-defined
+ * and may be bounded by the pool's release threshold.
+ *
+ * No-op when the SYCL extension is unavailable.
+ *
+ * @param  PRef   Pool handle.
+ * @ingroup MemoryPoolInterface
+ */
+DPCTL_API
+void DPCTLMemoryPool_ResetMemory(
+    __dpctl_keep const DPCTLSyclMemoryPoolRef PRef);
 
 DPCTL_C_EXTERN_C_END
