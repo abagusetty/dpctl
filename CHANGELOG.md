@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* Added a pluggable USM allocator hook (`dpctl.memory.set_allocator`,
+  `get_allocator`, `reset_allocator`) and a stream-ordered
+  `dpctl.memory.MemoryPool` class backed by the
+  `sycl_ext_oneapi_memory_pool` / `sycl_ext_oneapi_async_alloc`
+  extensions, with a transparent fallback to direct `sycl::malloc_*` /
+  `sycl::free` when the extensions are unavailable. Users can opt in
+  to pooled USM allocation in the style of CuPy's memory pool. When
+  no allocator is installed (the default), behavior is bit-for-bit
+  identical to earlier releases. Also added bypass entry points
+  `dpctl.memory.malloc_device`, `malloc_shared`, and `malloc_host`
+  for callers (e.g. ``gpu4pyscf``-style hybrid allocators) that need
+  to go directly to the underlying SYCL allocator regardless of any
+  installed hook.
+
 ### Change
 
 ### Fixed
