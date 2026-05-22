@@ -305,6 +305,74 @@ def test_reset_memory_does_not_error():
 
 
 # ---------------------------------------------------------------------------
+# Pool byte counters
+# ---------------------------------------------------------------------------
+
+
+def test_byte_counter_methods_exist():
+    """Smoke test: used_bytes / total_bytes / free_bytes are callable
+    and return non-negative integers regardless of extension
+    availability."""
+    q = _try_make_queue()
+    pool = dpm.MemoryPool(sycl_queue=q, usm_type="device")
+    assert isinstance(pool.used_bytes(), int)
+    assert isinstance(pool.total_bytes(), int)
+    assert isinstance(pool.free_bytes(), int)
+    assert pool.used_bytes() >= 0
+    assert pool.total_bytes() >= 0
+    assert pool.free_bytes() >= 0
+
+
+def test_byte_counter_invariants():
+    """When the SYCL extension is available, total = used + free must
+    hold modulo race-window adjustments. When the extension is absent
+    all three counters return 0 and the invariant trivially holds."""
+    q = _try_make_queue()
+    pool = dpm.MemoryPool(sycl_queue=q, usm_type="device")
+    used = pool.used_bytes()
+    total = pool.total_bytes()
+    free = pool.free_bytes()
+    # used + free should equal total. free_bytes() guards against
+    # transient inconsistency by returning 0 if used > total, so the
+    # weakest invariant we can assert is total >= used.
+    assert total >= used
+
+
+def test_used_bytes_grows_with_allocations():
+    """When the SYCL extension is available, allocating from a pool
+    should be observable in used_bytes(). When it's not, used_bytes()
+    is always 0 and the test is a no-op assertion."""
+    if not dpm.is_memory_pool_available():
+        pytest.skip(
+            "SYCL memory_pool extension unavailable; byte counters "
+            "are always 0 on the fallback path"
+        )
+    q = _try_make_queue()
+    pool = dpm.MemoryPool(sycl_queue=q, usm_type="device")
+    baseline_used = pool.used_bytes()
+    m = pool.malloc(1 << 20)  # 1 MiB
+    try:
+        # The pool should now report at least 1 MiB more in use than
+        # before. We use >= rather than == because the extension is
+        # free to round up to its allocation granularity.
+        assert pool.used_bytes() >= baseline_used + (1 << 20)
+    finally:
+        del m
+
+
+def test_total_bytes_at_least_used_bytes():
+    """Whatever the pool has handed out must be backed by at least
+    that much reserved memory."""
+    q = _try_make_queue()
+    pool = dpm.MemoryPool(sycl_queue=q, usm_type="device")
+    m = pool.malloc(1 << 20)
+    try:
+        assert pool.total_bytes() >= pool.used_bytes()
+    finally:
+        del m
+
+
+# ---------------------------------------------------------------------------
 # Pool installed via set_allocator
 # ---------------------------------------------------------------------------
 

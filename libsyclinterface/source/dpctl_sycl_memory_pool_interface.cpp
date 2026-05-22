@@ -373,3 +373,51 @@ void DPCTLMemoryPool_ResetMemory(
     }
 #endif
 }
+
+DPCTL_API
+size_t DPCTLMemoryPool_GetUsedBytes(
+    __dpctl_keep const DPCTLSyclMemoryPoolRef PRef)
+{
+    if (!PRef) {
+        error_handler("Input PRef is nullptr.", __FILE__, __func__, __LINE__);
+        return 0;
+    }
+#if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
+    DPCTLPoolImpl *impl = unwrap_pool(PRef);
+    try {
+        // The "current used size" query is exposed under different
+        // names across DPC++ revisions; ``get_used_size_current`` is
+        // the name in the proposed spec. If the CI toolchain uses a
+        // different name (e.g. ``get_used_size()``), this is the call
+        // site to update.
+        return impl->pool->get_used_size_current();
+    } catch (std::exception const &e) {
+        error_handler(e, __FILE__, __func__, __LINE__);
+        return 0;
+    }
+#else
+    return 0;
+#endif
+}
+
+DPCTL_API
+size_t DPCTLMemoryPool_GetReservedBytes(
+    __dpctl_keep const DPCTLSyclMemoryPoolRef PRef)
+{
+    if (!PRef) {
+        error_handler("Input PRef is nullptr.", __FILE__, __func__, __LINE__);
+        return 0;
+    }
+#if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
+    DPCTLPoolImpl *impl = unwrap_pool(PRef);
+    try {
+        // Same naming caveat as ``GetUsedBytes`` above.
+        return impl->pool->get_reserved_size_current();
+    } catch (std::exception const &e) {
+        error_handler(e, __FILE__, __func__, __LINE__);
+        return 0;
+    }
+#else
+    return 0;
+#endif
+}

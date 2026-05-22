@@ -235,4 +235,39 @@ DPCTL_API
 void DPCTLMemoryPool_ResetMemory(
     __dpctl_keep const DPCTLSyclMemoryPoolRef PRef);
 
+/*!
+ * @brief Return the number of bytes currently handed out by the pool to
+ * live allocations (i.e. allocations that have been served via
+ * ``DPCTLMemoryPool_Malloc`` and not yet released via
+ * ``DPCTLMemoryPool_AsyncFree``).
+ *
+ * Returns 0 when the SYCL extension is unavailable (the fallback path
+ * does not maintain per-pool bookkeeping).
+ *
+ * @param  PRef   Pool handle.
+ * @return Bytes currently in use, or 0 on error / extension absent.
+ * @ingroup MemoryPoolInterface
+ */
+DPCTL_API
+size_t DPCTLMemoryPool_GetUsedBytes(
+    __dpctl_keep const DPCTLSyclMemoryPoolRef PRef);
+
+/*!
+ * @brief Return the total number of bytes the pool has reserved from
+ * the underlying memory provider, including bytes currently handed out
+ * to live allocations and bytes cached for future reuse.
+ *
+ * ``used + free == total`` where ``free`` is
+ * ``DPCTLMemoryPool_GetReservedBytes - DPCTLMemoryPool_GetUsedBytes``.
+ *
+ * Returns 0 when the SYCL extension is unavailable.
+ *
+ * @param  PRef   Pool handle.
+ * @return Total bytes reserved, or 0 on error / extension absent.
+ * @ingroup MemoryPoolInterface
+ */
+DPCTL_API
+size_t DPCTLMemoryPool_GetReservedBytes(
+    __dpctl_keep const DPCTLSyclMemoryPoolRef PRef);
+
 DPCTL_C_EXTERN_C_END

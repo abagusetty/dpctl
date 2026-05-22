@@ -24,14 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dpctl, dpnp, and any other SYCL-using code in the same process).
   Repeated `get_default` calls with equivalent arguments return
   `is`-identical Python objects via an internal
-  `WeakValueDictionary`. Pool retention policy is controlled via
+  `WeakValueDictionary`.   Pool retention policy is controlled via
   `MemoryPool.set_release_threshold(N)` (analog of CUDA's
   `cudaMemPoolAttrReleaseThreshold`), and explicit eviction is
-  available via `MemoryPool.reset_memory()`. Also added bypass entry
-  points `dpctl.memory.malloc_device`, `malloc_shared`, and
-  `malloc_host` for callers (e.g. `gpu4pyscf`-style hybrid
-  allocators) that need to go directly to the underlying SYCL
-  allocator regardless of any installed hook.
+  available via `MemoryPool.reset_memory()` (the dpctl analog of
+  CuPy's `free_all_blocks()`). Live/cached byte counters are
+  exposed via `MemoryPool.used_bytes()`, `total_bytes()`, and
+  `free_bytes()`, matching the corresponding CuPy methods. Also
+  added bypass entry points `dpctl.memory.malloc_device`,
+  `malloc_shared`, and `malloc_host` for callers (e.g.
+  `gpu4pyscf`-style hybrid allocators) that need to go directly to
+  the underlying SYCL allocator regardless of any installed hook.
 
 ### Change
 

@@ -593,6 +593,10 @@ cdef extern from "syclinterface/dpctl_sycl_memory_pool_interface.h":
         size_t threshold) nogil
     cdef void DPCTLMemoryPool_ResetMemory(
         DPCTLSyclMemoryPoolRef PRef) nogil
+    cdef size_t DPCTLMemoryPool_GetUsedBytes(
+        DPCTLSyclMemoryPoolRef PRef) nogil
+    cdef size_t DPCTLMemoryPool_GetReservedBytes(
+        DPCTLSyclMemoryPoolRef PRef) nogil
 
 cdef extern from "syclinterface/dpctl_sycl_extension_interface.h":
     cdef struct RawWorkGroupMemoryTy

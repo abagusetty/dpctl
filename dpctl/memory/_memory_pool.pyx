@@ -40,6 +40,8 @@ from dpctl._backend cimport (  # noqa: E211
     DPCTLMemoryPool_Create,
     DPCTLMemoryPool_CreateDefault,
     DPCTLMemoryPool_Delete,
+    DPCTLMemoryPool_GetReservedBytes,
+    DPCTLMemoryPool_GetUsedBytes,
     DPCTLMemoryPool_IsDefault,
     DPCTLMemoryPool_Malloc,
     DPCTLMemoryPool_ResetMemory,
@@ -397,6 +399,17 @@ cdef class MemoryPool:
         blocks back to the underlying memory provider. Blocks still in
         use (handed out to live allocations) are untouched.
 
+        This is the dpctl analog of CuPy's
+        ``MemoryPool.free_all_blocks()``. The "free_all_blocks" name
+        is intentionally not exposed in dpctl: the SYCL extension does
+        not guarantee immediate release of every cached block, so the
+        CuPy name would over-promise. ``reset_memory()`` reflects the
+        actual best-effort semantics: the runtime is *asked* to release
+        the cache at its next opportunity (e.g. on the next queue
+        synchronization), but the precise amount released is
+        implementation-defined and may be bounded by other pool
+        properties.
+
         Note that ``reset_memory()`` on the *default* pool affects
         every component within the process that shares it. Use with
         care in shared-pool scenarios.
@@ -404,3 +417,52 @@ cdef class MemoryPool:
         No-op when :func:`is_memory_pool_available` returns ``False``.
         """
         DPCTLMemoryPool_ResetMemory(self._pool_ref)
+
+    def used_bytes(self):
+        """Number of bytes currently handed out by the pool to live
+        allocations (i.e. allocations served via
+        :meth:`malloc` and not yet released).
+
+        Returns ``0`` when :func:`is_memory_pool_available` returns
+        ``False`` — the fallback path does not maintain per-pool
+        bookkeeping. Callers must therefore treat ``0`` as
+        "unknown / unavailable" rather than "definitely empty".
+
+        Equivalent to CuPy's ``MemoryPool.used_bytes()``.
+        """
+        return int(DPCTLMemoryPool_GetUsedBytes(self._pool_ref))
+
+    def total_bytes(self):
+        """Total number of bytes the pool has reserved from the
+        underlying memory provider, including bytes currently handed
+        out to live allocations and bytes cached for future reuse.
+
+        ``total_bytes() == used_bytes() + free_bytes()``.
+
+        Returns ``0`` when :func:`is_memory_pool_available` returns
+        ``False``. Equivalent to CuPy's ``MemoryPool.total_bytes()``.
+        """
+        return int(DPCTLMemoryPool_GetReservedBytes(self._pool_ref))
+
+    def free_bytes(self):
+        """Number of bytes currently cached in the pool but not handed
+        out to any live allocation.
+
+        Computed as ``total_bytes() - used_bytes()``. Equivalent to
+        CuPy's ``MemoryPool.free_bytes()``.
+
+        Note: dpctl does NOT expose CuPy's ``n_free_blocks()`` because
+        the SYCL ``memory_pool`` extension does not expose a free-list
+        block count; only aggregate byte counts are queryable.
+        """
+        cdef size_t reserved = DPCTLMemoryPool_GetReservedBytes(
+            self._pool_ref
+        )
+        cdef size_t used = DPCTLMemoryPool_GetUsedBytes(self._pool_ref)
+        if reserved < used:
+            # Guard against transient inconsistencies between two
+            # separate runtime queries (race window where used is
+            # observed after a free that has not yet been reflected in
+            # reserved).
+            return 0
+        return int(reserved - used)
