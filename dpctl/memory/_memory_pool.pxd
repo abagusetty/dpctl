@@ -17,11 +17,11 @@
 # distutils: language = c++
 # cython: language_level=3
 
-"""This file declares the extension types and functions for the Cython API
-implemented in dpctl.memory._memory.pyx.
-
-"""
+from dpctl._backend cimport DPCTLSyclMemoryPoolRef
+from dpctl._sycl_queue cimport SyclQueue
 
 
-from dpctl.memory._memory cimport *
-from dpctl.memory._memory_pool cimport *
+cdef class MemoryPool:
+    cdef DPCTLSyclMemoryPoolRef _pool_ref
+    cdef SyclQueue _queue
+    cdef str _usm_type
