@@ -223,6 +223,88 @@ def test_is_memory_pool_available_returns_bool():
 
 
 # ---------------------------------------------------------------------------
+# Default-pool (singleton) semantics
+# ---------------------------------------------------------------------------
+
+
+def test_get_default_returns_pool():
+    q = _try_make_queue()
+    pool = dpm.MemoryPool.get_default(sycl_queue=q, usm_type="device")
+    assert isinstance(pool, dpm.MemoryPool)
+    assert pool.usm_type == "device"
+    assert pool.is_default is True
+
+
+def test_get_default_is_singleton_per_context_device_kind():
+    """Two get_default calls with the same (context, device, usm_type)
+    must return the same Python object (compared with ``is``)."""
+    q1 = _try_make_queue()
+    q2 = _try_make_queue()
+    # Same device, so equivalent context+device tuple regardless of
+    # whether q1 is q2.
+    pool_a = dpm.MemoryPool.get_default(sycl_queue=q1, usm_type="device")
+    pool_b = dpm.MemoryPool.get_default(sycl_queue=q2, usm_type="device")
+    assert pool_a is pool_b
+
+
+def test_get_default_distinct_for_distinct_usm_types():
+    q = _try_make_queue()
+    pool_d = dpm.MemoryPool.get_default(sycl_queue=q, usm_type="device")
+    pool_s = dpm.MemoryPool.get_default(sycl_queue=q, usm_type="shared")
+    assert pool_d is not pool_s
+    assert pool_d.usm_type == "device"
+    assert pool_s.usm_type == "shared"
+
+
+def test_private_pool_is_not_default():
+    """A regularly-constructed pool must report is_default == False."""
+    q = _try_make_queue()
+    private = dpm.MemoryPool(sycl_queue=q, usm_type="device")
+    assert private.is_default is False
+    default = dpm.MemoryPool.get_default(sycl_queue=q, usm_type="device")
+    assert default.is_default is True
+    assert private is not default
+
+
+def test_default_pool_supports_allocation():
+    """End-to-end: install the default pool as the allocator hook and
+    confirm that allocations through MemoryUSMDevice flow through it."""
+    q = _try_make_queue()
+    pool = dpm.MemoryPool.get_default(sycl_queue=q, usm_type="device")
+    dpm.set_allocator(
+        pool.malloc, usm_type="device", sycl_device=q.sycl_device
+    )
+    try:
+        for _ in range(8):
+            m = dpm.MemoryUSMDevice(8192, queue=q)
+            assert m.nbytes == 8192
+            del m
+    finally:
+        dpm.reset_allocator()
+
+
+def test_set_release_threshold_does_not_error():
+    """Smoke test for the threshold setter; cannot easily observe the
+    effect from Python."""
+    q = _try_make_queue()
+    pool = dpm.MemoryPool(sycl_queue=q, usm_type="device")
+    pool.set_release_threshold(1 << 20)
+    pool.set_release_threshold(0)
+
+
+def test_reset_memory_does_not_error():
+    """Smoke test for reset_memory; should be a no-op when no blocks
+    are cached, and not raise on the SYCL-extension-absent fallback
+    path."""
+    q = _try_make_queue()
+    pool = dpm.MemoryPool(sycl_queue=q, usm_type="device")
+    # Allocate then drop, giving the pool something it *could* release.
+    m = pool.malloc(4096)
+    del m
+    pool.reset_memory()
+
+
+# ---------------------------------------------------------------------------
 # Pool installed via set_allocator
 # ---------------------------------------------------------------------------
 

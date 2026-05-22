@@ -34,7 +34,9 @@ A typical use mirrors the CuPy pattern::
     import dpctl.memory as dpm
 
     q = dpctl.SyclQueue()
-    pool = dpm.MemoryPool(sycl_queue=q, usm_type="device")
+    # Use the process-wide default pool so cache is shared with dpnp
+    # and any other SYCL-using library in the same process.
+    pool = dpm.MemoryPool.get_default(sycl_queue=q, usm_type="device")
     dpm.set_allocator(pool.malloc, usm_type="device",
                       sycl_device=q.sycl_device)
 

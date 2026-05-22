@@ -16,11 +16,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sycl::free` when the extensions are unavailable. Users can opt in
   to pooled USM allocation in the style of CuPy's memory pool. When
   no allocator is installed (the default), behavior is bit-for-bit
-  identical to earlier releases. Also added bypass entry points
-  `dpctl.memory.malloc_device`, `malloc_shared`, and `malloc_host`
-  for callers (e.g. ``gpu4pyscf``-style hybrid allocators) that need
-  to go directly to the underlying SYCL allocator regardless of any
-  installed hook.
+  identical to earlier releases. Two pool flavors are exposed:
+  `MemoryPool(sycl_queue=q, usm_type=...)` constructs a private pool
+  with an isolated cache, and `MemoryPool.get_default(sycl_queue=q,
+  usm_type=...)` returns a process-wide singleton wrapper around the
+  SYCL runtime's default pool (so that cache state is shared across
+  dpctl, dpnp, and any other SYCL-using code in the same process).
+  Repeated `get_default` calls with equivalent arguments return
+  `is`-identical Python objects via an internal
+  `WeakValueDictionary`. Pool retention policy is controlled via
+  `MemoryPool.set_release_threshold(N)` (analog of CUDA's
+  `cudaMemPoolAttrReleaseThreshold`), and explicit eviction is
+  available via `MemoryPool.reset_memory()`. Also added bypass entry
+  points `dpctl.memory.malloc_device`, `malloc_shared`, and
+  `malloc_host` for callers (e.g. `gpu4pyscf`-style hybrid
+  allocators) that need to go directly to the underlying SYCL
+  allocator regardless of any installed hook.
 
 ### Change
 
