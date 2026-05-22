@@ -84,4 +84,12 @@ typedef struct DPCTLOpaqueSyclQueue *DPCTLSyclQueueRef;
  */
 typedef struct DPCTLOpaqueSyclUSM *DPCTLSyclUSMRef;
 
+/*!
+ * @brief Opaque pointer to a SYCL memory pool object backed by the
+ * ``sycl_ext_oneapi_memory_pool`` extension (or a fallback bookkeeping
+ * struct when the extension is unavailable).
+ *
+ */
+typedef struct DPCTLOpaqueSyclMemoryPool *DPCTLSyclMemoryPoolRef;
+
 DPCTL_C_EXTERN_C_END
