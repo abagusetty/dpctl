@@ -33,12 +33,6 @@
 
 #include <sycl/sycl.hpp>
 
-// The ``sycl_ext_oneapi_async_memory_alloc`` extension headers are
-// not pulled in by <sycl/sycl.hpp>; they have to be included
-// explicitly. ``<sycl/context.hpp>`` only forward-declares
-// ``memory_pool``, and ``<sycl/handler.hpp>`` only exposes the
-// handler-overload free functions, so without these the build sees
-// an incomplete type and missing queue overloads.
 #if __has_include(<sycl/ext/oneapi/experimental/async_alloc/memory_pool.hpp>)
 #include <sycl/ext/oneapi/experimental/async_alloc/async_alloc.hpp>
 #include <sycl/ext/oneapi/experimental/async_alloc/memory_pool.hpp>
