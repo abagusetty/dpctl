@@ -249,6 +249,8 @@ cdef class MemoryPool:
         ``None`` the pool's bound queue is used.
         """
         cdef DPCTLSyclUSMRef p = NULL
+        cdef DPCTLSyclQueueRef alloc_qref
+        cdef DPCTLSyclMemoryPoolRef pool_ref
         cdef _Memory base
         cdef SyclQueue alloc_q
 
@@ -266,9 +268,15 @@ cdef class MemoryPool:
                 )
             alloc_q = sycl_queue
 
+        # Extract raw refs before releasing the GIL; the underlying
+        # SYCL objects remain valid because ``alloc_q`` and ``self``
+        # are held as Python locals.
+        alloc_qref = alloc_q.get_queue_ref()
+        pool_ref = self._pool_ref
+
         with nogil:
             p = DPCTLMemoryPool_MallocOnQueue(
-                self._pool_ref, alloc_q.get_queue_ref(), <size_t>nbytes
+                pool_ref, alloc_qref, <size_t>nbytes
             )
         if p is NULL:
             from dpctl.memory._memory import USMAllocationError
@@ -282,13 +290,11 @@ cdef class MemoryPool:
                 nbytes,
                 alloc_q,
                 self,
-                self._pool_ref,
+                pool_ref,
                 p,
             )
         except Exception:
-            DPCTLMemoryPool_AsyncFreeOnQueue(
-                self._pool_ref, alloc_q.get_queue_ref(), p
-            )
+            DPCTLMemoryPool_AsyncFreeOnQueue(pool_ref, alloc_qref, p)
             raise
 
         if self._usm_type == "device":
