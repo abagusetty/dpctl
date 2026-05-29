@@ -420,33 +420,18 @@ def test_set_allocator_pool_matching_kwargs_accepted(clean_registry):
     ) is pool
 
 
-def test_use_default_pool_installs_supported_kinds(clean_registry):
-    """``use_default_pool()`` installs a pool for each USM kind the
-    runtime accepts; rejected kinds are silently skipped with a
-    RuntimeWarning."""
-    import warnings
-
+def test_use_default_pool_installs_device_only(clean_registry):
+    """``use_default_pool()`` installs a USM-device pool and leaves
+    USM-shared / USM-host paths untouched (the SYCL extension does
+    not support pooled shared/host allocations)."""
     q = _try_make_queue()
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
-        installed = dpm.use_default_pool(sycl_queue=q)
-
-    # device must always succeed per the spec; shared/host may or may
-    # not depending on the implementation.
-    assert "device" in installed
+    pool = dpm.use_default_pool(sycl_queue=q)
+    assert isinstance(pool, dpm.MemoryPool)
+    assert pool.usm_type == "device"
     assert (
-        dpm.get_allocator(
-            usm_type="device", sycl_device=q.sycl_device
-        )
-        is installed["device"]
+        dpm.get_allocator(usm_type="device", sycl_device=q.sycl_device)
+        is pool
     )
-
-
-def test_use_default_pool_explicit_kinds(clean_registry):
-    """Restricting ``usm_types`` installs only that subset."""
-    q = _try_make_queue()
-    installed = dpm.use_default_pool(sycl_queue=q, usm_types=("device",))
-    assert set(installed.keys()) == {"device"}
     assert (
         dpm.get_allocator(usm_type="shared", sycl_device=q.sycl_device)
         is None
