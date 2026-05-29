@@ -31,9 +31,7 @@ This module also exposes a pluggable allocator hook
 (:func:`set_allocator`) together with a stream-ordered
 :class:`MemoryPool` implementation. When no allocator is installed
 (the default), every allocation calls ``sycl::malloc_*`` and every
-deallocation calls ``sycl::free``. For the common opt-in case use
-:func:`use_default_pool` to install the SYCL runtime's default
-pool for every supported USM kind in one call.
+deallocation calls ``sycl::free``.
 """
 
 from ._allocator import get_allocator, reset_allocator, set_allocator
@@ -76,36 +74,6 @@ def _direct_alloc(cls, nbytes, queue):
         return cls(nbytes, queue=queue)
 
 
-def use_default_pool(*, sycl_queue=None):
-    """Install the SYCL runtime's default USM-device
-    :class:`MemoryPool` as the allocator hook.
-
-    Convenience wrapper for the common opt-in pattern::
-
-        pool = MemoryPool.get_default(sycl_queue=q, usm_type="device")
-        set_allocator(pool)
-
-    Only USM-device allocations are intercepted; USM-shared and
-    USM-host allocations continue to go directly to ``sycl::malloc_*``
-    because the ``sycl_ext_oneapi_async_memory_alloc`` extension
-    currently only supports pooled device allocations.
-
-    Args:
-        sycl_queue (Optional[:class:`dpctl.SyclQueue`]):
-            Queue whose ``(context, device)`` selects which pool to
-            install. ``None`` uses dpctl's cached default queue.
-
-    Returns:
-        MemoryPool: the installed pool wrapper.
-
-    A subsequent :func:`reset_allocator` call (with no kwargs) clears
-    the hook installed by this function.
-    """
-    pool = MemoryPool.get_default(sycl_queue=sycl_queue, usm_type="device")
-    set_allocator(pool)
-    return pool
-
-
 __all__ = [
     "MemoryPool",
     "MemoryUSMDevice",
@@ -120,5 +88,4 @@ __all__ = [
     "malloc_shared",
     "reset_allocator",
     "set_allocator",
-    "use_default_pool",
 ]

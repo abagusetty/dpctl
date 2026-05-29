@@ -420,28 +420,6 @@ def test_set_allocator_pool_matching_kwargs_accepted(clean_registry):
     ) is pool
 
 
-def test_use_default_pool_installs_device_only(clean_registry):
-    """``use_default_pool()`` installs a USM-device pool and leaves
-    USM-shared / USM-host paths untouched (the SYCL extension does
-    not support pooled shared/host allocations)."""
-    q = _try_make_queue()
-    pool = dpm.use_default_pool(sycl_queue=q)
-    assert isinstance(pool, dpm.MemoryPool)
-    assert pool.usm_type == "device"
-    assert (
-        dpm.get_allocator(usm_type="device", sycl_device=q.sycl_device)
-        is pool
-    )
-    assert (
-        dpm.get_allocator(usm_type="shared", sycl_device=q.sycl_device)
-        is None
-    )
-    assert (
-        dpm.get_allocator(usm_type="host", sycl_device=q.sycl_device)
-        is None
-    )
-
-
 def test_pool_is_callable_as_allocator():
     """The pool itself is a callable conforming to the allocator
     protocol (``__call__`` delegates to :meth:`malloc`)."""
