@@ -37,6 +37,7 @@ from dpctl._backend cimport (  # noqa: E211
     DPCTLMemoryPool_ResetMemory,
     DPCTLMemoryPool_SetReleaseThreshold,
     DPCTLSyclMemoryPoolRef,
+    DPCTLSyclQueueRef,
     DPCTLSyclUSMRef,
     _usm_type,
 )
