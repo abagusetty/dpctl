@@ -420,6 +420,43 @@ def test_set_allocator_pool_matching_kwargs_accepted(clean_registry):
     ) is pool
 
 
+def test_use_default_pool_installs_supported_kinds(clean_registry):
+    """``use_default_pool()`` installs a pool for each USM kind the
+    runtime accepts; rejected kinds are silently skipped with a
+    RuntimeWarning."""
+    import warnings
+
+    q = _try_make_queue()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        installed = dpm.use_default_pool(sycl_queue=q)
+
+    # device must always succeed per the spec; shared/host may or may
+    # not depending on the implementation.
+    assert "device" in installed
+    assert (
+        dpm.get_allocator(
+            usm_type="device", sycl_device=q.sycl_device
+        )
+        is installed["device"]
+    )
+
+
+def test_use_default_pool_explicit_kinds(clean_registry):
+    """Restricting ``usm_types`` installs only that subset."""
+    q = _try_make_queue()
+    installed = dpm.use_default_pool(sycl_queue=q, usm_types=("device",))
+    assert set(installed.keys()) == {"device"}
+    assert (
+        dpm.get_allocator(usm_type="shared", sycl_device=q.sycl_device)
+        is None
+    )
+    assert (
+        dpm.get_allocator(usm_type="host", sycl_device=q.sycl_device)
+        is None
+    )
+
+
 def test_pool_is_callable_as_allocator():
     """The pool itself is a callable conforming to the allocator
     protocol (``__call__`` delegates to :meth:`malloc`)."""

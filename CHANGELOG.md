@@ -48,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not contradict the pool's attributes. The pool object is also
   callable with the allocator-hook signature, so
   `set_allocator(pool)` is equivalent to `set_allocator(pool.malloc)`.
+* `dpctl.memory.use_default_pool()` installs the SYCL runtime's
+  default pool as the allocator for every supported USM kind in
+  one call. Kinds that the underlying SYCL extension rejects (today
+  shared/host) are silently skipped with a `RuntimeWarning`.
 
 ### Fixed
 

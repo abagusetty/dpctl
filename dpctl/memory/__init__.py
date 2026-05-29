@@ -31,7 +31,9 @@ This module also exposes a pluggable allocator hook
 (:func:`set_allocator`) together with a stream-ordered
 :class:`MemoryPool` implementation. When no allocator is installed
 (the default), every allocation calls ``sycl::malloc_*`` and every
-deallocation calls ``sycl::free``.
+deallocation calls ``sycl::free``. For the common opt-in case use
+:func:`use_default_pool` to install the SYCL runtime's default
+pool for every supported USM kind in one call.
 """
 
 from ._allocator import get_allocator, reset_allocator, set_allocator
@@ -74,6 +76,57 @@ def _direct_alloc(cls, nbytes, queue):
         return cls(nbytes, queue=queue)
 
 
+def use_default_pool(
+    *, sycl_queue=None, usm_types=("device", "shared", "host")
+):
+    """Install the SYCL runtime's default :class:`MemoryPool` as the
+    USM allocator for every USM kind in ``usm_types``.
+
+    Convenience wrapper for the common opt-in pattern::
+
+        for kind in usm_types:
+            pool = MemoryPool.get_default(sycl_queue=q, usm_type=kind)
+            set_allocator(pool)
+
+    Args:
+        sycl_queue (Optional[:class:`dpctl.SyclQueue`]):
+            Queue whose ``(context, device)`` selects which pool to
+            install. ``None`` uses dpctl's cached default queue.
+        usm_types (Iterable[str]):
+            USM kinds to install pools for. Defaults to all three.
+            Kinds that the underlying SYCL extension rejects (today
+            only ``"device"`` is mandated by
+            ``sycl_ext_oneapi_async_memory_alloc``) are silently
+            skipped; a per-kind ``RuntimeWarning`` is emitted so the
+            user can see which kinds were not installed.
+
+    Returns:
+        Dict[str, MemoryPool]: mapping from installed USM kind to its
+        pool wrapper. Kinds that were skipped are absent.
+
+    A subsequent :func:`reset_allocator` call (with no kwargs) clears
+    every hook installed by this function.
+    """
+    import warnings
+
+    installed = {}
+    for kind in usm_types:
+        try:
+            pool = MemoryPool.get_default(sycl_queue=sycl_queue, usm_type=kind)
+        except RuntimeError as e:
+            warnings.warn(
+                f"Could not install default pool for usm_type={kind!r}: "
+                f"{e}. The SYCL runtime may not support pooled "
+                f"allocations for this kind yet.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            continue
+        set_allocator(pool)
+        installed[kind] = pool
+    return installed
+
+
 __all__ = [
     "MemoryPool",
     "MemoryUSMDevice",
@@ -88,4 +141,5 @@ __all__ = [
     "malloc_shared",
     "reset_allocator",
     "set_allocator",
+    "use_default_pool",
 ]
