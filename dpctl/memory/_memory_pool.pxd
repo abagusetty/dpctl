@@ -25,8 +25,6 @@ cdef class MemoryPool:
     cdef DPCTLSyclMemoryPoolRef _pool_ref
     cdef SyclQueue _queue
     cdef str _usm_type
-    # Enables weakref support on the cdef class so that
-    # ``_default_pool_cache`` (a WeakValueDictionary in _memory_pool.pyx)
-    # can hold cache entries without pinning wrappers alive. Without
-    # this declaration, weakref.ref(pool) raises TypeError.
+    # Required for weakref support; consumed by the WeakValueDictionary
+    # backing ``MemoryPool.get_default``.
     cdef object __weakref__

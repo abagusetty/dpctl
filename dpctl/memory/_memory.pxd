@@ -43,16 +43,10 @@ cdef public api class _Memory [object Py_MemoryObject, type Py_MemoryType]:
     cdef Py_ssize_t nbytes
     cdef SyclQueue queue
     cdef object refobj
-    # When non-NULL, ``__dealloc__`` invokes this callback (via
-    # ``PoolReturnCallback_Invoke``) to release the underlying allocation
-    # back to a user-installed pool instead of running the default
-    # ``OpaqueSmartPtr_Delete`` path. Set by allocator hooks (see
-    # ``dpctl.memory.set_allocator``); left NULL on the legacy path so
-    # behavior is bit-for-bit unchanged when no allocator is installed.
+    # Non-NULL iff this allocation was produced by a pool-backed
+    # allocator hook; consumed by ``__dealloc__`` to return the block
+    # to the pool instead of calling ``sycl::free``.
     cdef void* _pool_return_cb
-    # Optional Python reference keeping the owning ``MemoryPool`` alive
-    # for as long as this allocation exists. Pure bookkeeping; ``None``
-    # on the legacy path.
     cdef object _pool_owner
 
     cdef _cinit_empty(self)

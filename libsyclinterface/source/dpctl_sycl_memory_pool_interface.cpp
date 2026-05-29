@@ -19,24 +19,9 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Implements ``dpctl_sycl_memory_pool_interface.h``.
-///
-/// Two backend strategies are provided:
-///
-///   * Extension backend, enabled when the compiler defines
-///     ``SYCL_EXT_ONEAPI_MEMORY_POOL`` and ``SYCL_EXT_ONEAPI_ASYNC_ALLOC``.
-///     The pool owns a ``sycl::ext::oneapi::experimental::memory_pool``
-///     instance; allocation goes through ``async_malloc_from_pool`` and
-///     freeing through ``async_free``, both stream-ordered against the
-///     queue used to create the pool.
-///
-///   * Fallback backend, used otherwise. The pool object holds only a
-///     queue and a USM kind; allocations are direct ``sycl::malloc_*``
-///     calls and frees are synchronous ``sycl::free`` on the pool's
-///     context. ``TrimTo`` is a no-op.
-///
-/// The opaque handle has the same shape on both paths so that callers
-/// never need to branch.
+/// Implements ``dpctl_sycl_memory_pool_interface.h``. Uses the SYCL
+/// memory-pool / async-alloc extensions when available; otherwise
+/// falls back to plain ``sycl::malloc_*`` / ``sycl::free``.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -63,21 +48,10 @@ using namespace dpctl::syclinterface;
 namespace
 {
 
-// ---------------------------------------------------------------------------
-// Internal pool bookkeeping structure
-// ---------------------------------------------------------------------------
-//
-// The struct has the same layout regardless of whether the SYCL extension
-// is available. The ``pool`` member is either a pointer to a real
-// ``sycl::ext::oneapi::experimental::memory_pool`` (extension path) or
-// ``nullptr`` (fallback path). Code paths that touch ``pool`` are guarded
-// by ``DPCTL_HAS_SYCL_MEMORY_POOL_EXT``.
-//
-// ``is_default`` records whether ``pool`` points at a private (heap-
-// allocated, owned) object or at the runtime's per-(context,device,kind)
-// default-pool singleton. The destructor uses this to decide whether to
-// ``delete pool`` (private) or just drop the handle (default).
-//
+// ``is_default`` records whether ``pool`` points at a private
+// (heap-allocated, owned) object or at a copy of the runtime's
+// default-pool handle. Only used for diagnostics; both flavors of
+// handle are deleted the same way (see DPCTLMemoryPool_Delete).
 struct DPCTLPoolImpl
 {
     sycl::queue queue;
@@ -152,9 +126,6 @@ DPCTLMemoryPool_Create(__dpctl_keep const DPCTLSyclQueueRef QRef,
             new DPCTLPoolImpl(*Q, kind, /*default_pool=*/false));
 #if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
         namespace syclex = sycl::ext::oneapi::experimental;
-        // Default construct with the queue's device & context and the
-        // requested USM kind. Properties are left at extension defaults
-        // (no fixed reservation, default release threshold).
         impl->pool = new syclex::memory_pool(Q->get_context(),
                                              Q->get_device(), kind);
 #endif
@@ -187,13 +158,9 @@ DPCTLMemoryPool_CreateDefault(__dpctl_keep const DPCTLSyclQueueRef QRef,
             new DPCTLPoolImpl(*Q, kind, /*default_pool=*/true));
 #if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
         namespace syclex = sycl::ext::oneapi::experimental;
-        // ext_oneapi_get_default_memory_pool returns a memory_pool value;
-        // we heap-allocate a copy of the handle so it can live behind the
-        // opaque PoolImpl pointer. The handle is cheap (a reference into
-        // the runtime singleton); copying it does NOT duplicate the pool
-        // or its cache. ``is_default == true`` ensures the destructor
-        // does not invoke ``delete impl->pool`` on this handle (we own
-        // only the handle wrapper, not the underlying pool object).
+        // The memory_pool returned by ext_oneapi_get_default_memory_pool
+        // is a handle/reference type; copying it does NOT duplicate the
+        // underlying runtime-owned pool object.
         sycl::context ctx = Q->get_context();
         syclex::memory_pool default_pool =
             ctx.ext_oneapi_get_default_memory_pool(Q->get_device(), kind);
@@ -214,14 +181,9 @@ void DPCTLMemoryPool_Delete(__dpctl_take DPCTLSyclMemoryPoolRef PRef)
     }
     DPCTLPoolImpl *impl = unwrap_pool(PRef);
 #if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
-    // Even for default-pool handles we ``delete impl->pool``, because
-    // ``impl->pool`` is our heap-allocated *copy* of the handle, not the
-    // runtime-owned pool object itself. Destroying the handle does not
-    // affect the underlying pool — the runtime keeps it alive as long as
-    // its owning context is alive. This invariant relies on
-    // sycl::ext::oneapi::experimental::memory_pool being implemented as
-    // a reference/handle type with proper copy semantics, which the
-    // extension specification requires.
+    // ``impl->pool`` is always our heap-allocated handle, not the
+    // runtime-owned pool itself; deletion of the handle does not affect
+    // the underlying pool.
     try {
         delete impl->pool;
     } catch (std::exception const &e) {
@@ -260,8 +222,6 @@ DPCTLMemoryPool_Malloc(__dpctl_keep const DPCTLSyclMemoryPoolRef PRef,
     try {
 #if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
         namespace syclex = sycl::ext::oneapi::experimental;
-        // async_malloc_from_pool: stream-ordered allocation served from
-        // the pool's cache when possible.
         ptr = syclex::async_malloc_from_pool(impl->queue, size, *impl->pool);
 #else
         switch (impl->kind) {
@@ -301,12 +261,10 @@ void DPCTLMemoryPool_AsyncFree(__dpctl_keep const DPCTLSyclMemoryPoolRef PRef,
     try {
 #if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
         namespace syclex = sycl::ext::oneapi::experimental;
-        // Stream-ordered free; orders behind any prior submissions on the
-        // pool's queue. This is the analog of cudaFreeAsync.
         syclex::async_free(impl->queue, ptr);
 #else
-        // Fallback: synchronous free on the pool's context. Caller is
-        // responsible for ensuring no device work is in flight on ptr.
+        // Caller is responsible for ensuring no device work is in
+        // flight on ``ptr`` when the extension is unavailable.
         sycl::free(ptr, impl->queue.get_context());
 #endif
     } catch (std::exception const &e) {
@@ -325,18 +283,8 @@ void DPCTLMemoryPool_SetReleaseThreshold(
 #if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
     DPCTLPoolImpl *impl = unwrap_pool(PRef);
     try {
-        // The extension exposes the release threshold via
-        // ``increase_threshold_to`` (matching the example in the
-        // sycl_ext_oneapi_async_memory_alloc spec). As implied by the
-        // method name this is *monotonic* — it can raise the threshold
-        // but cannot lower it. Callers that need to shrink the retained
-        // cache must either accept that their request will be ignored
-        // if smaller than the current threshold, or call
-        // ``DPCTLMemoryPool_ResetMemory`` and reconstruct the pool.
-        //
-        // Older DPC++ revisions may expose the threshold as a
-        // property-set rather than a method; if the CI toolchain
-        // disagrees, this is the call site that needs updating.
+        // ``increase_threshold_to`` is monotonic per the
+        // sycl_ext_oneapi_async_memory_alloc spec.
         impl->pool->increase_threshold_to(threshold);
     } catch (std::exception const &e) {
         error_handler(e, __FILE__, __func__, __LINE__);
@@ -357,16 +305,9 @@ void DPCTLMemoryPool_ResetMemory(
 #if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
     DPCTLPoolImpl *impl = unwrap_pool(PRef);
     try {
-        // The sycl_ext_oneapi_async_memory_alloc spec at the time of
-        // writing does not expose a dedicated "evict everything now"
-        // method on memory_pool. The closest portable surrogate is to
-        // drive the release threshold to zero; the runtime will then
-        // release excess at its next opportunity (e.g. on the next
-        // queue synchronization).
-        //
-        // If a future DPC++ revision exposes a dedicated
-        // ``reset_memory()`` (or equivalent) method, this implementation
-        // should be updated to call it directly for stronger semantics.
+        // No dedicated "evict now" API in the current spec; driving
+        // the threshold to 0 lets the runtime release cached blocks
+        // at its next opportunity.
         impl->pool->increase_threshold_to(0);
     } catch (std::exception const &e) {
         error_handler(e, __FILE__, __func__, __LINE__);
@@ -385,11 +326,6 @@ size_t DPCTLMemoryPool_GetUsedBytes(
 #if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
     DPCTLPoolImpl *impl = unwrap_pool(PRef);
     try {
-        // The "current used size" query is exposed under different
-        // names across DPC++ revisions; ``get_used_size_current`` is
-        // the name in the proposed spec. If the CI toolchain uses a
-        // different name (e.g. ``get_used_size()``), this is the call
-        // site to update.
         return impl->pool->get_used_size_current();
     } catch (std::exception const &e) {
         error_handler(e, __FILE__, __func__, __LINE__);
@@ -411,7 +347,6 @@ size_t DPCTLMemoryPool_GetReservedBytes(
 #if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
     DPCTLPoolImpl *impl = unwrap_pool(PRef);
     try {
-        // Same naming caveat as ``GetUsedBytes`` above.
         return impl->pool->get_reserved_size_current();
     } catch (std::exception const &e) {
         error_handler(e, __FILE__, __func__, __LINE__);

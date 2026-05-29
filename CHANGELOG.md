@@ -8,33 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-* Added a pluggable USM allocator hook (`dpctl.memory.set_allocator`,
-  `get_allocator`, `reset_allocator`) and a stream-ordered
-  `dpctl.memory.MemoryPool` class backed by the
-  `sycl_ext_oneapi_memory_pool` / `sycl_ext_oneapi_async_alloc`
-  extensions, with a transparent fallback to direct `sycl::malloc_*` /
-  `sycl::free` when the extensions are unavailable. Users can opt in
-  to pooled USM allocation in the style of CuPy's memory pool. When
-  no allocator is installed (the default), behavior is bit-for-bit
-  identical to earlier releases. Two pool flavors are exposed:
-  `MemoryPool(sycl_queue=q, usm_type=...)` constructs a private pool
-  with an isolated cache, and `MemoryPool.get_default(sycl_queue=q,
-  usm_type=...)` returns a process-wide singleton wrapper around the
-  SYCL runtime's default pool (so that cache state is shared across
-  dpctl, dpnp, and any other SYCL-using code in the same process).
-  Repeated `get_default` calls with equivalent arguments return
-  `is`-identical Python objects via an internal
-  `WeakValueDictionary`.   Pool retention policy is controlled via
-  `MemoryPool.set_release_threshold(N)` (analog of CUDA's
-  `cudaMemPoolAttrReleaseThreshold`), and explicit eviction is
-  available via `MemoryPool.reset_memory()` (the dpctl analog of
-  CuPy's `free_all_blocks()`). Live/cached byte counters are
-  exposed via `MemoryPool.used_bytes()`, `total_bytes()`, and
-  `free_bytes()`, matching the corresponding CuPy methods. Also
-  added bypass entry points `dpctl.memory.malloc_device`,
-  `malloc_shared`, and `malloc_host` for callers (e.g.
-  `gpu4pyscf`-style hybrid allocators) that need to go directly to
-  the underlying SYCL allocator regardless of any installed hook.
+* Added pluggable USM allocator hook (`dpctl.memory.set_allocator`,
+  `get_allocator`, `reset_allocator`) and `dpctl.memory.MemoryPool`,
+  a stream-ordered pool backed by `sycl_ext_oneapi_memory_pool` /
+  `sycl_ext_oneapi_async_alloc` with a `sycl::malloc_*` fallback.
+  Opt-in; default behavior unchanged. `MemoryPool(...)` constructs
+  a private pool; `MemoryPool.get_default(...)` wraps the SYCL
+  runtime's default pool (shared across dpctl, dpnp, and other
+  SYCL-using code in the same process). Supports
+  `set_release_threshold`, `reset_memory`, and
+  `used_bytes` / `total_bytes` / `free_bytes` counters. Bypass
+  entry points `dpctl.memory.malloc_device`, `malloc_shared`,
+  `malloc_host` route directly to the underlying SYCL allocator
+  regardless of any installed hook.
 
 ### Change
 

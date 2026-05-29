@@ -17,18 +17,7 @@
 # distutils: language = c++
 # cython: language_level=3
 
-"""Pool-backed USM allocator for :mod:`dpctl.memory`.
-
-The :class:`MemoryPool` class is the recommended way to install a
-stream-ordered, reuse-friendly USM allocator via
-:func:`dpctl.memory.set_allocator`. When the underlying SYCL
-``sycl_ext_oneapi_memory_pool`` extension is available, allocations and
-frees are stream-ordered against the queue the pool was constructed
-with, providing the same lifetime-safety guarantees as CuPy's
-``MemoryAsyncPool``. When the extension is not available the pool falls
-back to a transparent ``sycl::malloc_* / sycl::free`` implementation,
-preserving correctness at the cost of the stream-ordering optimization.
-"""
+"""Pool-backed USM allocator for :mod:`dpctl.memory`."""
 
 import weakref
 
@@ -63,19 +52,7 @@ from dpctl.memory._memory cimport (
 __all__ = ["MemoryPool", "is_memory_pool_available"]
 
 
-# ---------------------------------------------------------------------------
-# Default-pool wrapper cache
-# ---------------------------------------------------------------------------
-# The SYCL runtime's default memory pool is itself a singleton per
-# ``(context, device, usm_kind)`` tuple. We additionally cache the
-# *Python* wrapper around it so that two calls to
-# ``MemoryPool.get_default`` with equivalent arguments return ``is``-
-# identical Python objects. The cache uses weak references so that a
-# wrapper can still be collected once no user code holds it (its
-# entries do not pin the SyclQueue / SyclContext alive indefinitely).
-#
-# Key shape: (context_hash, device_hash, usm_kind_str)
-#
+# Key: (context_hash, device_hash, usm_kind_str).
 _default_pool_cache = weakref.WeakValueDictionary()
 
 
@@ -84,12 +61,9 @@ def is_memory_pool_available():
     that exposes the ``sycl_ext_oneapi_memory_pool`` and
     ``sycl_ext_oneapi_async_alloc`` extensions, ``False`` otherwise.
 
-    When this returns ``False`` :class:`MemoryPool` still functions, but
-    its allocations go through plain ``sycl::malloc_*`` and its frees
-    through synchronous ``sycl::free`` on the pool's context. The pool
-    therefore still provides a single, opt-in allocator surface for
-    :func:`dpctl.memory.set_allocator`, but no stream-ordered free or
-    cache-reuse optimization.
+    When ``False`` :class:`MemoryPool` still works, but allocations
+    go through plain ``sycl::malloc_*`` and frees through synchronous
+    ``sycl::free``.
     """
     return bool(DPCTLMemoryPool_Available())
 
@@ -112,51 +86,24 @@ cdef class MemoryPool:
 
     A SYCL memory pool bound to a queue's device/context.
 
-    Two construction modes are supported:
+    Construction modes:
 
-    * ``MemoryPool(sycl_queue=q, usm_type=...)`` constructs a **private**
-      pool with an isolated cache. Use this when you need pool-level
-      isolation (memory budget enforcement, debugging fragmentation,
-      multi-tenancy within a single process).
-
+    * ``MemoryPool(sycl_queue=q, usm_type=...)`` constructs a private
+      pool with an isolated cache.
     * :meth:`MemoryPool.get_default` returns a wrapper around the SYCL
-      runtime's **default** pool for the given ``(context, device,
-      usm_type)``. The underlying pool is a runtime-managed singleton:
-      all callers within the process share its cache. This is the
-      recommended mode for libraries that want to amortize allocation
-      cost across the whole application.
+      runtime's default pool for the given ``(context, device,
+      usm_type)``; all callers within the process share its cache.
 
-    The pool is the recommended building block for installing a custom
-    allocator via :func:`dpctl.memory.set_allocator`. Its
-    :meth:`MemoryPool.malloc` method has the exact signature expected
-    by the allocator hook (``(nbytes, sycl_queue) -> _Memory``).
+    :meth:`malloc` has the signature expected by the allocator hook
+    (``(nbytes, sycl_queue) -> _Memory``) and is the intended argument
+    to :func:`dpctl.memory.set_allocator`.
 
     Args:
         sycl_queue (Optional[:class:`dpctl.SyclQueue`]):
-            The queue whose device and context the pool is bound to.
-            All allocations served by this pool are valid in that
-            context and may be touched by that device. If ``None``, a
-            cached default-constructed queue is used.
+            Queue whose device and context the pool is bound to. If
+            ``None``, a cached default-constructed queue is used.
         usm_type (str):
             One of ``"device"`` (default), ``"shared"``, or ``"host"``.
-            Selects which kind of USM allocation this pool serves.
-
-    Example::
-
-        import dpctl
-        import dpctl.memory as dpm
-
-        q = dpctl.SyclQueue()
-
-        # Process-wide shared default pool (recommended for most uses):
-        pool = dpm.MemoryPool.get_default(sycl_queue=q, usm_type="device")
-
-        dpm.set_allocator(pool.malloc, usm_type="device",
-                          sycl_device=q.sycl_device)
-
-        # All subsequent USM-device allocations on this device are
-        # served from ``pool``:
-        m = dpm.MemoryUSMDevice(1 << 20, queue=q)
     """
 
     def __cinit__(self, *, SyclQueue sycl_queue=None, str usm_type="device"):
@@ -191,29 +138,8 @@ cdef class MemoryPool:
         runtime's default memory pool for the given
         ``(context, device, usm_type)``.
 
-        The underlying pool is a process-wide singleton managed by the
-        SYCL runtime: multiple calls with the same context+device+
-        usm_type share the same cache, regardless of which library
-        within the process initiated them. This is the recommended
-        choice for production use, because it allows dpnp,
-        ``gpu4pyscf``, and any other SYCL-using component in the same
-        process to amortize allocation cost together.
-
-        Within a single dpctl process, repeated calls with equivalent
-        arguments return the *same Python wrapper object* (compared
-        with ``is``), backed by a process-local
-        :class:`weakref.WeakValueDictionary`. The cache entry is
-        cleared when the last user reference to the wrapper is
-        dropped.
-
-        Multi-process note: each OS process has its own SYCL runtime
-        and therefore its own default pool. There is no cross-process
-        coordination; pool reservations are per-process.
-
-        Args:
-            sycl_queue: Queue selecting the ``(context, device)`` tuple.
-            usm_type: USM allocation kind (``'device'``, ``'shared'``,
-                or ``'host'``).
+        Repeated calls with equivalent arguments return the same
+        Python wrapper object (compared with ``is``).
         """
         cdef _usm_type kind
         cdef DPCTLSyclMemoryPoolRef pref = NULL
@@ -222,8 +148,6 @@ cdef class MemoryPool:
         if sycl_queue is None:
             sycl_queue = get_device_cached_queue(dpctl.SyclDevice())
 
-        # ``usm_type_str_to_enum`` validates the string before we
-        # touch the cache.
         kind = _usm_type_str_to_enum(usm_type)
 
         cache_key = (
@@ -231,12 +155,8 @@ cdef class MemoryPool:
             hash(sycl_queue.sycl_device),
             usm_type,
         )
-        # Thread-safety note: this lookup-then-insert is racy, but
-        # benignly so. If two threads miss simultaneously they'll both
-        # construct a wrapper; the second insert wins. Both wrappers
-        # point at the same runtime-owned default pool, so cache state
-        # is shared regardless of which Python object the caller ends
-        # up with. The cache is best-effort dedup, not exclusion.
+        # Benignly racy: two concurrent misses produce two wrappers
+        # both pointing at the same runtime-owned default pool.
         existing = _default_pool_cache.get(cache_key)
         if existing is not None:
             return existing
@@ -250,19 +170,13 @@ cdef class MemoryPool:
                 f"usm_type={usm_type!r}"
             )
 
-        # Construct a MemoryPool instance and then replace its private
-        # pool with the default-pool handle. Cython runs __cinit__
-        # unconditionally on object creation, so the cheapest correct
-        # path is to let __cinit__ build a (small, immediately
-        # discarded) private pool, then swap in the default-pool
-        # handle. The wasted private-pool construction happens at most
-        # once per unique (context, device, usm_type) cache miss; cache
-        # hits skip this path entirely.
+        # __cinit__ always builds a private pool; swap in the
+        # default-pool handle. The throwaway private pool is built at
+        # most once per (context, device, usm_type) cache miss.
         obj = MemoryPool(sycl_queue=sycl_queue, usm_type=usm_type)
         if obj._pool_ref is not NULL:
             DPCTLMemoryPool_Delete(obj._pool_ref)
         obj._pool_ref = pref
-        # ``_queue`` and ``_usm_type`` are already correct from __cinit__.
         _default_pool_cache[cache_key] = obj
         return obj
 
@@ -283,41 +197,25 @@ cdef class MemoryPool:
 
     @property
     def usm_type(self):
-        """The USM allocation kind this pool serves (``'device'``,
-        ``'shared'``, or ``'host'``)."""
+        """The USM allocation kind this pool serves."""
         return self._usm_type
 
     @property
     def is_default(self):
         """``True`` when this wrapper refers to the SYCL runtime's
-        default pool for its ``(context, device, usm_type)`` tuple
-        (i.e. constructed via :meth:`get_default`); ``False`` when it
-        wraps a private pool constructed via the regular constructor.
-        """
+        default pool (constructed via :meth:`get_default`)."""
         if self._pool_ref is NULL:
             return False
         return bool(DPCTLMemoryPool_IsDefault(self._pool_ref))
 
     def malloc(self, Py_ssize_t nbytes, SyclQueue sycl_queue=None):
         """Allocate ``nbytes`` bytes from the pool and return a
-        :class:`_Memory` instance (concrete subclass matching
-        :attr:`usm_type`) that owns the allocation.
-
-        When the returned ``_Memory`` object is destroyed, the allocation
-        is returned to the pool (stream-ordered against ``sycl_queue``
-        when the SYCL extension is available, synchronous on the pool's
-        context otherwise).
+        :class:`_Memory` instance.
 
         Args:
             nbytes: Number of bytes to allocate. Must be positive.
-            sycl_queue: Queue used for ordering of the allocation/free
-                operations relative to other work. If ``None``, defaults
-                to the queue the pool was constructed with. Must share
-                the same SYCL context as the pool's queue.
-
-        Returns:
-            One of :class:`MemoryUSMDevice`, :class:`MemoryUSMShared`,
-            or :class:`MemoryUSMHost` depending on :attr:`usm_type`.
+            sycl_queue: Queue for ordering of the allocation/free.
+                Defaults to the queue the pool was constructed with.
         """
         cdef DPCTLSyclUSMRef p = NULL
         cdef _Memory base
@@ -337,26 +235,16 @@ cdef class MemoryPool:
                 f"Pool allocation of {nbytes} bytes failed"
             )
 
-        # Construct a bare _Memory and stamp it with the pool-return
-        # bookkeeping; then wrap it in the appropriate USM-typed subclass
-        # via the (bare _Memory) -> subclass constructor path. The
-        # subclass's ``__cinit__`` -> ``_cinit_other`` branch recognizes
-        # the pool-owned source and keeps it alive via ``refobj``,
-        # ensuring the eventual ``__dealloc__`` of the returned object
-        # invokes the pool-return callback.
         base = _Memory.__new__(_Memory)
         try:
             base._cinit_from_pool(
                 nbytes,
                 sycl_queue,
-                self,  # pool_owner: keeps the pool alive while allocation lives
+                self,
                 self._pool_ref,
                 p,
             )
         except Exception:
-            # Bookkeeping failed before ownership of ``p`` was handed to
-            # the callback; release manually to avoid leaking the USM
-            # allocation.
             DPCTLMemoryPool_AsyncFree(self._pool_ref, p)
             raise
 
@@ -368,101 +256,44 @@ cdef class MemoryPool:
             return MemoryUSMHost(base)
 
     def set_release_threshold(self, size_t threshold):
-        """Raise the pool's release threshold — the lower bound (in
-        bytes) on the size of the cache below which the implementation
-        should not release blocks back to the underlying memory
-        provider.
-
-        This is **not** a "release the cache now" operation; for that,
-        use :meth:`reset_memory`. The release threshold is a *policy*
-        for future release decisions:
-
-        * ``cached_bytes <= threshold``: implementation retains the
-          cache for cheap reuse.
-        * ``cached_bytes >  threshold``: implementation may release
-          the excess back to the driver.
-
-        The CUDA analog is the
-        ``cudaMemPoolAttrReleaseThreshold`` attribute.
-
-        Note: per the underlying SYCL extension, this setter is
-        *monotonic* — it can only raise the threshold, not lower it. To
-        shrink the retained cache, use :meth:`reset_memory` and/or
-        construct a fresh pool.
-
-        No-op when :func:`is_memory_pool_available` returns ``False``.
+        """Raise the pool's release threshold in bytes. Below the
+        threshold the implementation retains cached blocks; above it,
+        excess may be released back to the driver. Monotonic — can
+        only be raised, not lowered. No-op when
+        :func:`is_memory_pool_available` returns ``False``.
         """
         DPCTLMemoryPool_SetReleaseThreshold(self._pool_ref, threshold)
 
     def reset_memory(self):
-        """Attempt to immediately release all currently-cached, unused
-        blocks back to the underlying memory provider. Blocks still in
-        use (handed out to live allocations) are untouched.
-
-        This is the dpctl analog of CuPy's
-        ``MemoryPool.free_all_blocks()``. The "free_all_blocks" name
-        is intentionally not exposed in dpctl: the SYCL extension does
-        not guarantee immediate release of every cached block, so the
-        CuPy name would over-promise. ``reset_memory()`` reflects the
-        actual best-effort semantics: the runtime is *asked* to release
-        the cache at its next opportunity (e.g. on the next queue
-        synchronization), but the precise amount released is
-        implementation-defined and may be bounded by other pool
-        properties.
-
-        Note that ``reset_memory()`` on the *default* pool affects
-        every component within the process that shares it. Use with
-        care in shared-pool scenarios.
-
-        No-op when :func:`is_memory_pool_available` returns ``False``.
+        """Attempt to release all currently-cached, unused blocks
+        back to the underlying memory provider. Best-effort: the
+        runtime decides when and how much to release. No-op when
+        :func:`is_memory_pool_available` returns ``False``.
         """
         DPCTLMemoryPool_ResetMemory(self._pool_ref)
 
     def used_bytes(self):
         """Number of bytes currently handed out by the pool to live
-        allocations (i.e. allocations served via
-        :meth:`malloc` and not yet released).
-
-        Returns ``0`` when :func:`is_memory_pool_available` returns
-        ``False`` — the fallback path does not maintain per-pool
-        bookkeeping. Callers must therefore treat ``0`` as
-        "unknown / unavailable" rather than "definitely empty".
-
-        Equivalent to CuPy's ``MemoryPool.used_bytes()``.
+        allocations. Returns ``0`` when
+        :func:`is_memory_pool_available` returns ``False``.
         """
         return int(DPCTLMemoryPool_GetUsedBytes(self._pool_ref))
 
     def total_bytes(self):
-        """Total number of bytes the pool has reserved from the
-        underlying memory provider, including bytes currently handed
-        out to live allocations and bytes cached for future reuse.
-
-        ``total_bytes() == used_bytes() + free_bytes()``.
-
+        """Total bytes the pool has reserved (used + free).
         Returns ``0`` when :func:`is_memory_pool_available` returns
-        ``False``. Equivalent to CuPy's ``MemoryPool.total_bytes()``.
+        ``False``.
         """
         return int(DPCTLMemoryPool_GetReservedBytes(self._pool_ref))
 
     def free_bytes(self):
-        """Number of bytes currently cached in the pool but not handed
-        out to any live allocation.
-
-        Computed as ``total_bytes() - used_bytes()``. Equivalent to
-        CuPy's ``MemoryPool.free_bytes()``.
-
-        Note: dpctl does NOT expose CuPy's ``n_free_blocks()`` because
-        the SYCL ``memory_pool`` extension does not expose a free-list
-        block count; only aggregate byte counts are queryable.
+        """Number of bytes currently cached and not handed out.
+        Computed as ``total_bytes() - used_bytes()``.
         """
         cdef size_t reserved = DPCTLMemoryPool_GetReservedBytes(
             self._pool_ref
         )
         cdef size_t used = DPCTLMemoryPool_GetUsedBytes(self._pool_ref)
         if reserved < used:
-            # Guard against transient inconsistencies between two
-            # separate runtime queries (race window where used is
-            # observed after a free that has not yet been reflected in
-            # reserved).
             return 0
         return int(reserved - used)

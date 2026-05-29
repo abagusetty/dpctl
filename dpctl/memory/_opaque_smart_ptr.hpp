@@ -19,8 +19,8 @@
 //===---------------------------------------------------------------------===//
 ///
 /// \file
-/// This file implements working with shared_ptr<void> with USM deleted
-/// disguided as an opaque pointer.
+/// shared_ptr<void> with USM deleter, plus a pool-return callback used
+/// when a _Memory was produced by a user-installed pool allocator.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -59,7 +59,6 @@ public:
         } catch (const std::exception &e) {
             std::cout << "Call to sycl::free caught an exception: " << e.what()
                       << std::endl;
-            // std::terminate();
         }
     }
 
@@ -80,19 +79,13 @@ void *OpaqueSmartPtr_Make(void *usm_ptr, const sycl::queue &q)
 void *OpaqueSmartPtr_Make(void *usm_ptr, DPCTLSyclQueueRef QRef)
 {
     sycl::queue *q_ptr = dpctl::syclinterface::unwrap<sycl::queue>(QRef);
-
-    // make a copy of queue
     sycl::queue q{*q_ptr};
-
-    void *res = OpaqueSmartPtr_Make(usm_ptr, q);
-
-    return res;
+    return OpaqueSmartPtr_Make(usm_ptr, q);
 }
 
 void OpaqueSmartPtr_Delete(void *opaque_ptr)
 {
     auto sptr = reinterpret_cast<std::shared_ptr<void> *>(opaque_ptr);
-
     delete sptr;
 }
 
@@ -117,22 +110,6 @@ void *OpaqueSmartPtr_Get(void *opaque_ptr)
     return sptr->get();
 }
 
-// ---------------------------------------------------------------------------
-// Pool-return callback support
-// ---------------------------------------------------------------------------
-//
-// When a ``_Memory`` instance was produced by a user-installed allocator that
-// is backed by a ``MemoryPool``, the destruction path must hand the
-// allocation back to the pool rather than running the default
-// shared_ptr-based ``sycl::free``. To make that polymorphic from Cython we
-// store, alongside the opaque smart pointer, a separate heap-allocated
-// ``std::function<void()>`` whose body knows how to enqueue the pool-return
-// (typically by calling ``DPCTLMemoryPool_AsyncFree``).
-//
-// Both fields are independent: when no allocator hook is set, the callback
-// pointer is left null and the destruction path is unchanged from earlier
-// dpctl releases. The cost on the legacy code path is a single null check.
-//
 typedef void (*PoolReturnFn)(void *user_data);
 
 struct PoolReturnCallback
@@ -141,10 +118,6 @@ struct PoolReturnCallback
     void *user_data;
 };
 
-// Build a callback that asks ``DPCTLMemoryPool_AsyncFree(pool, usm_ptr)``.
-// The caller is responsible for ensuring ``pool`` outlives the callback;
-// typically the Python ``MemoryPool`` instance holding ``pool`` is kept
-// alive by being captured as an attribute on the ``_Memory`` wrapper.
 struct PoolFreeUserData
 {
     DPCTLSyclMemoryPoolRef pool;
@@ -190,16 +163,11 @@ void PoolReturnCallback_Invoke(void *cb_ptr)
 
 void PoolReturnCallback_Discard(void *cb_ptr)
 {
-    // Used when the _Memory wrapper is being torn down without actually
-    // freeing the underlying allocation (e.g. when ownership has been
-    // transferred elsewhere). Releases the callback bookkeeping but does
-    // NOT invoke the free.
+    // Releases the callback bookkeeping WITHOUT invoking the free.
     if (!cb_ptr) {
         return;
     }
     auto *cb = reinterpret_cast<PoolReturnCallback *>(cb_ptr);
-    // The user_data was allocated as a PoolFreeUserData in
-    // PoolReturnCallback_Make; release it without calling AsyncFree.
     auto *ud = reinterpret_cast<PoolFreeUserData *>(cb->user_data);
     delete ud;
     delete cb;
