@@ -118,10 +118,13 @@ struct PoolReturnCallback
     void *user_data;
 };
 
-// ``queue`` is owned by-value so the callback can free the USM block
-// against the allocation queue regardless of whether the wrapping
-// ``_Memory`` is destroyed before, with, or after the owning
-// ``MemoryPool`` Python wrapper.
+// Both ``pool`` and ``queue`` are non-owning raw handles. Their
+// lifetimes are pinned by Python-side references held on the owning
+// ``_Memory``: ``_pool_owner`` keeps the ``MemoryPool`` wrapper (and
+// thus ``pool``) alive, and ``queue`` (the ``_Memory.queue`` Python
+// field) keeps the ``SyclQueue`` wrapper (and thus the underlying
+// ``DPCTLSyclQueueRef``) alive. Both refs are valid at the moment
+// ``_Memory.__dealloc__`` runs and invokes this callback.
 struct PoolFreeUserData
 {
     DPCTLSyclMemoryPoolRef pool;
