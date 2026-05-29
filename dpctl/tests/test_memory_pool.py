@@ -359,3 +359,110 @@ def test_device_hook_does_not_affect_shared(clean_registry):
     m = dpm.MemoryUSMShared(1024, queue=q)
     assert calls["device_hook"] == 0
     del m
+
+
+def test_aligned_alloc_with_hook_warns_and_bypasses(clean_registry):
+    """A non-zero ``alignment`` request bypasses the hook (most pools
+    cannot honor arbitrary alignment) and emits a RuntimeWarning."""
+    import warnings
+
+    q = _try_make_queue()
+    calls = {"hook": 0}
+
+    def hook(nbytes, queue):
+        calls["hook"] += 1
+        return dpm.malloc_device(nbytes, queue=queue)
+
+    dpm.set_allocator(hook, usm_type="device")
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        m = dpm.MemoryUSMDevice(1024, alignment=64, queue=q)
+        assert any(
+            issubclass(w.category, RuntimeWarning) and "alignment" in str(w.message)
+            for w in caught
+        )
+    assert calls["hook"] == 0
+    del m
+
+
+def test_pool_malloc_rejects_wrong_context():
+    """``MemoryPool.malloc(queue=q)`` must reject queues from a
+    different SYCL context."""
+    q1 = _try_make_queue()
+    pool = dpm.MemoryPool(sycl_queue=q1, usm_type="device")
+    try:
+        # Construct a fresh queue with an independent context.
+        q2 = dpctl.SyclQueue(q1.sycl_device)
+    except dpctl.SyclQueueCreationError:
+        pytest.skip("Cannot create a second SyclQueue for context test")
+    if q2.sycl_context == q1.sycl_context:
+        pytest.skip("Both queues share the same context; cannot exercise check")
+    with pytest.raises(ValueError, match="context"):
+        pool.malloc(1024, sycl_queue=q2)
+
+
+def test_pool_malloc_with_explicit_queue_honors_it():
+    """``pool.malloc(queue=q)`` with a context-compatible queue must
+    succeed and the returned allocation must carry that queue."""
+    q = _try_make_queue()
+    pool = dpm.MemoryPool(sycl_queue=q, usm_type="device")
+    m = pool.malloc(1024, sycl_queue=q)
+    try:
+        assert m.sycl_queue is q
+    finally:
+        del m
+
+
+def test_get_default_thread_safe_singleton():
+    """Concurrent ``get_default`` calls must return the same wrapper.
+    Exercises the lock around the WeakValueDictionary insert."""
+    import threading
+
+    q = _try_make_queue()
+    results = []
+    barrier = threading.Barrier(8)
+
+    def worker():
+        barrier.wait()
+        results.append(
+            dpm.MemoryPool.get_default(sycl_queue=q, usm_type="device")
+        )
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    first = results[0]
+    for r in results[1:]:
+        assert r is first
+
+
+def test_set_allocator_concurrent_reads_no_lock_contention(clean_registry):
+    """Smoke test: multiple threads calling ``MemoryUSMDevice`` with a
+    pool hook installed must not deadlock and must all succeed.
+    Exercises the lock-free read path on ``_registry``."""
+    import threading
+
+    q = _try_make_queue()
+    pool = dpm.MemoryPool(sycl_queue=q, usm_type="device")
+    dpm.set_allocator(
+        pool.malloc, usm_type="device", sycl_device=q.sycl_device
+    )
+    errors = []
+
+    def worker():
+        try:
+            for _ in range(32):
+                m = dpm.MemoryUSMDevice(4096, queue=q)
+                del m
+        except Exception as e:  # pragma: no cover
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors

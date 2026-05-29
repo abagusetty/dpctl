@@ -118,24 +118,35 @@ struct PoolReturnCallback
     void *user_data;
 };
 
+// ``queue`` is owned by-value so the callback can free the USM block
+// against the allocation queue regardless of whether the wrapping
+// ``_Memory`` is destroyed before, with, or after the owning
+// ``MemoryPool`` Python wrapper.
 struct PoolFreeUserData
 {
     DPCTLSyclMemoryPoolRef pool;
+    DPCTLSyclQueueRef queue;
     DPCTLSyclUSMRef usm_ptr;
 };
 
 inline void _pool_return_invoke(void *user_data)
 {
     auto *ud = reinterpret_cast<PoolFreeUserData *>(user_data);
-    DPCTLMemoryPool_AsyncFree(ud->pool, ud->usm_ptr);
+    if (ud->queue) {
+        DPCTLMemoryPool_AsyncFreeOnQueue(ud->pool, ud->queue, ud->usm_ptr);
+    }
+    else {
+        DPCTLMemoryPool_AsyncFree(ud->pool, ud->usm_ptr);
+    }
     delete ud;
 }
 
 void *PoolReturnCallback_Make(DPCTLSyclMemoryPoolRef pool,
+                              DPCTLSyclQueueRef queue,
                               DPCTLSyclUSMRef usm_ptr)
 {
     try {
-        auto *ud = new PoolFreeUserData{pool, usm_ptr};
+        auto *ud = new PoolFreeUserData{pool, queue, usm_ptr};
         auto *cb = new PoolReturnCallback{&_pool_return_invoke,
                                           reinterpret_cast<void *>(ud)};
         return reinterpret_cast<void *>(cb);

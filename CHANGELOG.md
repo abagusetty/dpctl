@@ -24,6 +24,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Change
 
+* `MemoryPool.malloc(nbytes, sycl_queue=q)` now honors the queue
+  argument for stream-ordering of both the allocation and the
+  eventual async-free, and rejects queues that do not share the
+  pool's SYCL context.
+* `_Memory._cinit_alloc` no longer takes a lock on the no-hook path;
+  the registry is read GIL-atomically. `MemoryPool.get_default` now
+  serializes its cache insert so concurrent callers strictly share
+  one wrapper. `__dealloc__` of pool-backed allocations skips the
+  pool callback during interpreter shutdown to avoid use-after-free.
+* `MemoryPool.reset_memory()` now also synchronizes the pool's
+  queue so pending stream-ordered frees are flushed before the
+  runtime's threshold-driven release runs.
+* SYCL `memory_pool` member-name detection is now SFINAE-guarded;
+  `used_bytes`/`total_bytes`/threshold setters degrade to no-ops
+  instead of breaking the build when DPC++ uses alternate names.
+* A `RuntimeWarning` is now emitted when a USM allocation requests
+  a non-zero `alignment` while a pool hook is installed (the hook
+  is bypassed because most pools cannot honor arbitrary alignment).
+
 ### Fixed
 
 ## [0.22.1] - Apr. 24, 2026

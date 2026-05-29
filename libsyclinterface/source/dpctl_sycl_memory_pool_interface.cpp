@@ -34,6 +34,7 @@
 #include <sycl/sycl.hpp>
 
 #include <new>
+#include <type_traits>
 #include <utility>
 
 #if defined(SYCL_EXT_ONEAPI_MEMORY_POOL) &&                                    \
@@ -44,6 +45,80 @@
 #endif
 
 using namespace dpctl::syclinterface;
+
+#if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
+namespace
+{
+// SFINAE detection for memory_pool member functions whose names differ
+// across DPC++ revisions. When a name is missing the corresponding
+// query returns 0 / no-op rather than failing the build.
+template <typename, typename = void>
+struct has_used_size_current : std::false_type
+{};
+template <typename P>
+struct has_used_size_current<
+    P,
+    std::void_t<decltype(std::declval<P>().get_used_size_current())>>
+    : std::true_type
+{};
+
+template <typename, typename = void>
+struct has_reserved_size_current : std::false_type
+{};
+template <typename P>
+struct has_reserved_size_current<
+    P,
+    std::void_t<decltype(std::declval<P>().get_reserved_size_current())>>
+    : std::true_type
+{};
+
+template <typename, typename = void>
+struct has_increase_threshold_to : std::false_type
+{};
+template <typename P>
+struct has_increase_threshold_to<
+    P,
+    std::void_t<decltype(std::declval<P>().increase_threshold_to(
+        std::declval<size_t>()))>> : std::true_type
+{};
+
+template <typename P>
+inline size_t safe_used_size(P &p)
+{
+    if constexpr (has_used_size_current<P>::value) {
+        return p.get_used_size_current();
+    }
+    else {
+        (void)p;
+        return 0;
+    }
+}
+
+template <typename P>
+inline size_t safe_reserved_size(P &p)
+{
+    if constexpr (has_reserved_size_current<P>::value) {
+        return p.get_reserved_size_current();
+    }
+    else {
+        (void)p;
+        return 0;
+    }
+}
+
+template <typename P>
+inline void safe_increase_threshold(P &p, size_t threshold)
+{
+    if constexpr (has_increase_threshold_to<P>::value) {
+        p.increase_threshold_to(threshold);
+    }
+    else {
+        (void)p;
+        (void)threshold;
+    }
+}
+} // namespace
+#endif
 
 namespace
 {
@@ -203,6 +278,44 @@ bool DPCTLMemoryPool_IsDefault(
     return unwrap_pool(PRef)->is_default;
 }
 
+namespace
+{
+
+void *pool_malloc_on(DPCTLPoolImpl *impl, const sycl::queue &q, size_t size)
+{
+#if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
+    namespace syclex = sycl::ext::oneapi::experimental;
+    return syclex::async_malloc_from_pool(q, size, *impl->pool);
+#else
+    switch (impl->kind) {
+    case sycl::usm::alloc::device:
+        return sycl::malloc_device(size, q);
+    case sycl::usm::alloc::shared:
+        return sycl::malloc_shared(size, q);
+    case sycl::usm::alloc::host:
+        return sycl::malloc_host(size, q);
+    default:
+        return nullptr;
+    }
+#endif
+}
+
+void pool_free_on(DPCTLPoolImpl *impl, const sycl::queue &q, void *ptr)
+{
+#if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
+    namespace syclex = sycl::ext::oneapi::experimental;
+    (void)impl;
+    syclex::async_free(q, ptr);
+#else
+    (void)impl;
+    // Synchronous free on the context shared by ``q``; caller must
+    // ensure no device work is in flight on ``ptr``.
+    sycl::free(ptr, q.get_context());
+#endif
+}
+
+} // namespace
+
 DPCTL_API
 __dpctl_give DPCTLSyclUSMRef
 DPCTLMemoryPool_Malloc(__dpctl_keep const DPCTLSyclMemoryPoolRef PRef,
@@ -218,31 +331,38 @@ DPCTLMemoryPool_Malloc(__dpctl_keep const DPCTLSyclMemoryPoolRef PRef,
         return nullptr;
     }
     DPCTLPoolImpl *impl = unwrap_pool(PRef);
-    void *ptr = nullptr;
     try {
-#if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
-        namespace syclex = sycl::ext::oneapi::experimental;
-        ptr = syclex::async_malloc_from_pool(impl->queue, size, *impl->pool);
-#else
-        switch (impl->kind) {
-        case sycl::usm::alloc::device:
-            ptr = sycl::malloc_device(size, impl->queue);
-            break;
-        case sycl::usm::alloc::shared:
-            ptr = sycl::malloc_shared(size, impl->queue);
-            break;
-        case sycl::usm::alloc::host:
-            ptr = sycl::malloc_host(size, impl->queue);
-            break;
-        default:
-            break;
-        }
-#endif
+        return wrap<void>(pool_malloc_on(impl, impl->queue, size));
     } catch (std::exception const &e) {
         error_handler(e, __FILE__, __func__, __LINE__);
         return nullptr;
     }
-    return wrap<void>(ptr);
+}
+
+DPCTL_API
+__dpctl_give DPCTLSyclUSMRef DPCTLMemoryPool_MallocOnQueue(
+    __dpctl_keep const DPCTLSyclMemoryPoolRef PRef,
+    __dpctl_keep const DPCTLSyclQueueRef QRef,
+    size_t size)
+{
+    if (!PRef || !QRef) {
+        error_handler("Input PRef or QRef is nullptr.", __FILE__, __func__,
+                      __LINE__);
+        return nullptr;
+    }
+    if (size == 0) {
+        error_handler("Zero-byte allocation requested.", __FILE__, __func__,
+                      __LINE__);
+        return nullptr;
+    }
+    DPCTLPoolImpl *impl = unwrap_pool(PRef);
+    try {
+        sycl::queue *q = unwrap<sycl::queue>(QRef);
+        return wrap<void>(pool_malloc_on(impl, *q, size));
+    } catch (std::exception const &e) {
+        error_handler(e, __FILE__, __func__, __LINE__);
+        return nullptr;
+    }
 }
 
 DPCTL_API
@@ -257,16 +377,31 @@ void DPCTLMemoryPool_AsyncFree(__dpctl_keep const DPCTLSyclMemoryPoolRef PRef,
         return;
     }
     DPCTLPoolImpl *impl = unwrap_pool(PRef);
-    void *ptr = unwrap<void>(MRef);
     try {
-#if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
-        namespace syclex = sycl::ext::oneapi::experimental;
-        syclex::async_free(impl->queue, ptr);
-#else
-        // Caller is responsible for ensuring no device work is in
-        // flight on ``ptr`` when the extension is unavailable.
-        sycl::free(ptr, impl->queue.get_context());
-#endif
+        pool_free_on(impl, impl->queue, unwrap<void>(MRef));
+    } catch (std::exception const &e) {
+        error_handler(e, __FILE__, __func__, __LINE__);
+    }
+}
+
+DPCTL_API
+void DPCTLMemoryPool_AsyncFreeOnQueue(
+    __dpctl_keep const DPCTLSyclMemoryPoolRef PRef,
+    __dpctl_keep const DPCTLSyclQueueRef QRef,
+    __dpctl_take DPCTLSyclUSMRef MRef)
+{
+    if (!PRef || !QRef) {
+        error_handler("Input PRef or QRef is nullptr.", __FILE__, __func__,
+                      __LINE__);
+        return;
+    }
+    if (!MRef) {
+        return;
+    }
+    DPCTLPoolImpl *impl = unwrap_pool(PRef);
+    try {
+        sycl::queue *q = unwrap<sycl::queue>(QRef);
+        pool_free_on(impl, *q, unwrap<void>(MRef));
     } catch (std::exception const &e) {
         error_handler(e, __FILE__, __func__, __LINE__);
     }
@@ -283,9 +418,7 @@ void DPCTLMemoryPool_SetReleaseThreshold(
 #if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
     DPCTLPoolImpl *impl = unwrap_pool(PRef);
     try {
-        // ``increase_threshold_to`` is monotonic per the
-        // sycl_ext_oneapi_async_memory_alloc spec.
-        impl->pool->increase_threshold_to(threshold);
+        safe_increase_threshold(*impl->pool, threshold);
     } catch (std::exception const &e) {
         error_handler(e, __FILE__, __func__, __LINE__);
     }
@@ -305,10 +438,10 @@ void DPCTLMemoryPool_ResetMemory(
 #if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
     DPCTLPoolImpl *impl = unwrap_pool(PRef);
     try {
-        // No dedicated "evict now" API in the current spec; driving
-        // the threshold to 0 lets the runtime release cached blocks
-        // at its next opportunity.
-        impl->pool->increase_threshold_to(0);
+        // No dedicated "evict now" API in the spec; setting the
+        // release threshold to 0 asks the runtime to release excess
+        // cached blocks at its next opportunity.
+        safe_increase_threshold(*impl->pool, 0);
     } catch (std::exception const &e) {
         error_handler(e, __FILE__, __func__, __LINE__);
     }
@@ -326,7 +459,7 @@ size_t DPCTLMemoryPool_GetUsedBytes(
 #if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
     DPCTLPoolImpl *impl = unwrap_pool(PRef);
     try {
-        return impl->pool->get_used_size_current();
+        return safe_used_size(*impl->pool);
     } catch (std::exception const &e) {
         error_handler(e, __FILE__, __func__, __LINE__);
         return 0;
@@ -347,7 +480,7 @@ size_t DPCTLMemoryPool_GetReservedBytes(
 #if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
     DPCTLPoolImpl *impl = unwrap_pool(PRef);
     try {
-        return impl->pool->get_reserved_size_current();
+        return safe_reserved_size(*impl->pool);
     } catch (std::exception const &e) {
         error_handler(e, __FILE__, __func__, __LINE__);
         return 0;

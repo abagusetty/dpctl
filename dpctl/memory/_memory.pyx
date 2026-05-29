@@ -84,23 +84,69 @@ cdef extern from "_opaque_smart_ptr.hpp":
     void OpaqueSmartPtr_Delete(void *) nogil
     void * OpaqueSmartPtr_Get(void *) nogil
     void * PoolReturnCallback_Make(
-        DPCTLSyclMemoryPoolRef pool, DPCTLSyclUSMRef usm_ptr) nogil
+        DPCTLSyclMemoryPoolRef pool,
+        DPCTLSyclQueueRef queue,
+        DPCTLSyclUSMRef usm_ptr) nogil
     void PoolReturnCallback_Invoke(void *cb_ptr) nogil
     void PoolReturnCallback_Discard(void *cb_ptr) nogil
 
 
-# Deferred import so the no-hook path stays cheap and we avoid bootstrap
-# ordering issues during dpctl init.
-_allocator_lookup_fn = None
+# Allocator-hook registry exported by dpctl.memory._allocator; populated
+# lazily on first allocation to avoid bootstrap ordering issues. Accessed
+# directly (not via a function call) on the no-hook hot path:
+#
+#   reg = _allocator_registry           # GIL-protected single dict load
+#   hook = reg.get(key) if reg else None
+#
+# CPython's GIL guarantees the dict.get() is atomic; no Python-level lock
+# is required on the read path. Writes happen in set/reset_allocator and
+# do hold a lock (see dpctl.memory._allocator).
+cdef object _allocator_registry = None
+cdef object _allocator_bypass_tls = None
 
 
-cdef inline object _invoke_allocator_lookup(str usm_kind,
-                                            object sycl_device):
-    global _allocator_lookup_fn
-    if _allocator_lookup_fn is None:
-        from dpctl.memory._allocator import _lookup_allocator as _fn
-        _allocator_lookup_fn = _fn
-    return _allocator_lookup_fn(usm_kind, sycl_device)
+cdef inline object _registry_lookup(str usm_kind, object sycl_device):
+    """Lock-free registry lookup. Returns the installed hook callable
+    or None when no hook applies."""
+    global _allocator_registry, _allocator_bypass_tls
+    cdef object reg = _allocator_registry
+    cdef object tls
+    cdef object hook
+    cdef object key
+    cdef object dev_key
+    if reg is None:
+        from dpctl.memory._allocator import (
+            _registry as _r,
+            _bypass_tls as _t,
+        )
+        _allocator_registry = reg = _r
+        _allocator_bypass_tls = _t
+    if not reg:
+        return None
+    tls = _allocator_bypass_tls
+    if getattr(tls, "depth", 0) > 0:
+        return None
+    dev_key = hash(sycl_device) if sycl_device is not None else None
+    if dev_key is not None:
+        hook = reg.get((usm_kind, dev_key))
+        if hook is not None:
+            return hook
+    return reg.get((usm_kind, None))
+
+
+# Set to True by an atexit handler so __dealloc__ paths can skip work
+# that would otherwise touch potentially-freed Python objects (e.g. the
+# MemoryPool wrapper held by _pool_owner) during interpreter shutdown.
+cdef bint _exit_mode = False
+
+
+def _set_exit_mode():
+    global _exit_mode
+    _exit_mode = True
+
+
+import atexit
+atexit.register(_set_exit_mode)
 
 
 class USMAllocationError(Exception):
@@ -201,31 +247,31 @@ cdef class _Memory:
 
             # Aligned-alloc requests bypass the hook because most pool
             # implementations cannot honor arbitrary user alignment.
+            # We still emit a warning when an alignment was requested
+            # AND a hook is installed, so the user knows their pool was
+            # silently skipped on this call.
             usm_kind_str = ptr_type.decode("UTF-8")
             hook = None
             if alignment <= 0:
-                hook = _invoke_allocator_lookup(
-                    usm_kind_str, queue.sycl_device
+                hook = _registry_lookup(usm_kind_str, queue.sycl_device)
+            elif _registry_lookup(usm_kind_str, queue.sycl_device) is not None:
+                import warnings
+                warnings.warn(
+                    "USM allocation requested alignment="
+                    f"{alignment}; the installed allocator hook for "
+                    f"usm_type={usm_kind_str!r} cannot honor "
+                    "alignment, so this allocation bypassed the hook "
+                    "and went directly to sycl::aligned_alloc_*.",
+                    RuntimeWarning,
+                    stacklevel=2,
                 )
             if hook is not None:
-                try:
-                    hook_mem = <_Memory>hook(nbytes, queue)
-                except Exception:
-                    raise
+                hook_mem = <_Memory>hook(nbytes, queue)
                 if hook_mem is None or hook_mem._memory_ptr is NULL:
                     raise USMAllocationError(
                         "Allocator hook returned an empty allocation"
                     )
-                # Transfer ownership from hook_mem to self, including
-                # any pool-return bookkeeping the hook stamped on it.
-                self._memory_ptr = hook_mem._memory_ptr
-                self._opaque_ptr = hook_mem._opaque_ptr
-                self.nbytes = hook_mem.nbytes
-                self.queue = hook_mem.queue
-                self.refobj = hook_mem.refobj
-                self._pool_return_cb = hook_mem._pool_return_cb
-                self._pool_owner = hook_mem._pool_owner
-                hook_mem._cinit_empty()
+                self._adopt_pool_payload(hook_mem)
                 return
 
             QRef = queue.get_queue_ref()
@@ -281,9 +327,11 @@ cdef class _Memory:
                           DPCTLSyclMemoryPoolRef pool_ref,
                           DPCTLSyclUSMRef usm_ptr):
         """Construct a ``_Memory`` whose ``__dealloc__`` returns the
-        allocation to the pool via ``DPCTLMemoryPool_AsyncFree``. No
-        ``OpaqueSmartPtr`` is created on this path; the pool callback
-        is the sole owner of the USM allocation.
+        allocation to the pool via ``DPCTLMemoryPool_AsyncFreeOnQueue``
+        against ``queue`` (preserving stream-ordering against the work
+        that consumed this allocation). No ``OpaqueSmartPtr`` is
+        created on this path; the pool callback is the sole owner of
+        the USM allocation.
         """
         self._cinit_empty()
         if usm_ptr is NULL:
@@ -293,12 +341,31 @@ cdef class _Memory:
         self.nbytes = nbytes
         self.queue = queue
         self.refobj = None
-        self._pool_return_cb = PoolReturnCallback_Make(pool_ref, usm_ptr)
+        self._pool_return_cb = PoolReturnCallback_Make(
+            pool_ref, queue.get_queue_ref(), usm_ptr
+        )
         if self._pool_return_cb is NULL:
             raise USMAllocationError(
                 "Could not register pool-return callback for allocation"
             )
         self._pool_owner = pool_owner
+
+    cdef _adopt_pool_payload(self, object other):
+        """Transfer the USM allocation + pool bookkeeping from
+        ``other`` (a ``_Memory`` produced by an allocator hook) onto
+        ``self``, neutering ``other`` so its ``__dealloc__`` is a
+        no-op. Used by ``_cinit_alloc`` when routing through a
+        registered hook.
+        """
+        cdef _Memory src = <_Memory>other
+        self._memory_ptr = src._memory_ptr
+        self._opaque_ptr = src._opaque_ptr
+        self.nbytes = src.nbytes
+        self.queue = src.queue
+        self.refobj = src.refobj
+        self._pool_return_cb = src._pool_return_cb
+        self._pool_owner = src._pool_owner
+        src._cinit_empty()
 
     cdef _cinit_other(self, object other):
         cdef _Memory other_mem
@@ -344,7 +411,15 @@ cdef class _Memory:
 
     def __dealloc__(self):
         if self._pool_return_cb is not NULL:
-            PoolReturnCallback_Invoke(self._pool_return_cb)
+            if _exit_mode:
+                # Interpreter shutdown: the MemoryPool wrapper held by
+                # _pool_owner (and the underlying pool/queue C++
+                # objects) may already be torn down. Skip the pool
+                # callback rather than risk a use-after-free; the OS
+                # reclaims the USM allocation at process exit.
+                PoolReturnCallback_Discard(self._pool_return_cb)
+            else:
+                PoolReturnCallback_Invoke(self._pool_return_cb)
             self._pool_return_cb = NULL
             self._pool_owner = None
             self._cinit_empty()

@@ -31,9 +31,17 @@ __all__ = [
 
 _VALID_USM_TYPES = frozenset({"device", "shared", "host"})
 
+# Registry of installed hooks. CPython's GIL makes both ``dict.get`` and
+# single-key mutations atomic, so the hot read path in
+# ``_Memory._cinit_alloc`` reads this dict *without* taking ``_lock``.
+# ``_lock`` is held only by writers (``set_allocator`` /
+# ``reset_allocator``) to serialize against each other.
 _registry: dict = {}
 _lock = threading.RLock()
 
+# Thread-local bypass counter used by ``malloc_device`` and friends to
+# suspend hook lookup on the current thread for the duration of a direct
+# allocation. The Cython hot path reads ``_bypass_tls.depth`` directly.
 _bypass_tls = threading.local()
 
 
@@ -124,12 +132,11 @@ def get_allocator(
     matches."""
     usm_type_norm = _normalize_usm_type(usm_type)
     dev_key = _device_key(sycl_device)
-    with _lock:
-        if dev_key is not None:
-            specific = _registry.get((usm_type_norm, dev_key))
-            if specific is not None:
-                return specific
-        return _registry.get((usm_type_norm, None))
+    if dev_key is not None:
+        specific = _registry.get((usm_type_norm, dev_key))
+        if specific is not None:
+            return specific
+    return _registry.get((usm_type_norm, None))
 
 
 def reset_allocator(
@@ -146,8 +153,7 @@ def reset_allocator(
         if usm_type is not None:
             usm_type_norm = _normalize_usm_type(usm_type)
             if sycl_device is None:
-                keys = [k for k in _registry if k[0] == usm_type_norm]
-                for k in keys:
+                for k in [k for k in _registry if k[0] == usm_type_norm]:
                     _registry.pop(k, None)
             else:
                 _registry.pop(
@@ -155,20 +161,5 @@ def reset_allocator(
                 )
         else:
             dev_key = _device_key(sycl_device)
-            keys = [k for k in _registry if k[1] == dev_key]
-            for k in keys:
+            for k in [k for k in _registry if k[1] == dev_key]:
                 _registry.pop(k, None)
-
-
-def _lookup_allocator(
-    usm_type: str, sycl_device: Optional[dpctl.SyclDevice]
-) -> Optional[Callable]:
-    if _bypass_active():
-        return None
-    dev_key = _device_key(sycl_device) if sycl_device is not None else None
-    with _lock:
-        if dev_key is not None:
-            specific = _registry.get((usm_type, dev_key))
-            if specific is not None:
-                return specific
-        return _registry.get((usm_type, None))

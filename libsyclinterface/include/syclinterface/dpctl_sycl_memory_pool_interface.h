@@ -100,14 +100,8 @@ bool DPCTLMemoryPool_IsDefault(
     __dpctl_keep const DPCTLSyclMemoryPoolRef PRef);
 
 /*!
- * @brief Allocate USM memory from a pool.
- *
- * Stream-ordered against the pool's queue when the extension is
- * available; otherwise a plain ``sycl::malloc_*``.
- *
- * @param  PRef       Pool handle.
- * @param  size       Number of bytes to allocate. Must be positive.
- * @return USM pointer, or ``nullptr`` on failure.
+ * @brief Allocate USM memory from a pool, ordered against the pool's
+ * bound queue.
  * @ingroup MemoryPoolInterface
  */
 DPCTL_API
@@ -116,14 +110,35 @@ DPCTLMemoryPool_Malloc(__dpctl_keep const DPCTLSyclMemoryPoolRef PRef,
                        size_t size);
 
 /*!
- * @brief Stream-ordered free of a pool-allocated pointer. Falls back to
- * synchronous ``sycl::free`` on the pool's context when the extension
- * is unavailable.
+ * @brief Allocate USM memory from a pool, ordered against ``QRef``.
+ * ``QRef`` must share the pool's SYCL context.
+ * @ingroup MemoryPoolInterface
+ */
+DPCTL_API
+__dpctl_give DPCTLSyclUSMRef DPCTLMemoryPool_MallocOnQueue(
+    __dpctl_keep const DPCTLSyclMemoryPoolRef PRef,
+    __dpctl_keep const DPCTLSyclQueueRef QRef,
+    size_t size);
+
+/*!
+ * @brief Stream-ordered free of a pool-allocated pointer against the
+ * pool's bound queue.
  * @ingroup MemoryPoolInterface
  */
 DPCTL_API
 void DPCTLMemoryPool_AsyncFree(__dpctl_keep const DPCTLSyclMemoryPoolRef PRef,
                                __dpctl_take DPCTLSyclUSMRef MRef);
+
+/*!
+ * @brief Stream-ordered free of a pool-allocated pointer against
+ * ``QRef``. ``QRef`` must share the pool's SYCL context.
+ * @ingroup MemoryPoolInterface
+ */
+DPCTL_API
+void DPCTLMemoryPool_AsyncFreeOnQueue(
+    __dpctl_keep const DPCTLSyclMemoryPoolRef PRef,
+    __dpctl_keep const DPCTLSyclQueueRef QRef,
+    __dpctl_take DPCTLSyclUSMRef MRef);
 
 /*!
  * @brief Set the pool's release threshold (analog of

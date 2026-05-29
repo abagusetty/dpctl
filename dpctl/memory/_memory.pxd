@@ -56,6 +56,7 @@ cdef public api class _Memory [object Py_MemoryObject, type Py_MemoryType]:
                           object pool_owner,
                           DPCTLSyclMemoryPoolRef pool_ref,
                           DPCTLSyclUSMRef usm_ptr)
+    cdef _adopt_pool_payload(self, object other)
     cdef _cinit_other(self, object other)
     cdef _getbuffer(self, Py_buffer *buffer, int flags)
 

@@ -585,8 +585,16 @@ cdef extern from "syclinterface/dpctl_sycl_memory_pool_interface.h":
     cdef DPCTLSyclUSMRef DPCTLMemoryPool_Malloc(
         DPCTLSyclMemoryPoolRef PRef,
         size_t size) nogil
+    cdef DPCTLSyclUSMRef DPCTLMemoryPool_MallocOnQueue(
+        DPCTLSyclMemoryPoolRef PRef,
+        DPCTLSyclQueueRef QRef,
+        size_t size) nogil
     cdef void DPCTLMemoryPool_AsyncFree(
         DPCTLSyclMemoryPoolRef PRef,
+        DPCTLSyclUSMRef MRef) nogil
+    cdef void DPCTLMemoryPool_AsyncFreeOnQueue(
+        DPCTLSyclMemoryPoolRef PRef,
+        DPCTLSyclQueueRef QRef,
         DPCTLSyclUSMRef MRef) nogil
     cdef void DPCTLMemoryPool_SetReleaseThreshold(
         DPCTLSyclMemoryPoolRef PRef,
