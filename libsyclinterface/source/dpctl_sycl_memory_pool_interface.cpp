@@ -40,13 +40,8 @@
 // The ``sycl_ext_oneapi_async_memory_alloc`` extension defines a
 // single feature-test macro (``SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC``)
 // that gates both the ``memory_pool`` class and the ``async_malloc``
-// / ``async_free`` free functions. Older or speculative names
-// (``SYCL_EXT_ONEAPI_MEMORY_POOL``, ``SYCL_EXT_ONEAPI_ASYNC_ALLOC``)
-// are accepted as fallbacks for toolchains that pre-date the
-// final spec macro name.
-#if defined(SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC) ||                             \
-    (defined(SYCL_EXT_ONEAPI_MEMORY_POOL) &&                                   \
-     defined(SYCL_EXT_ONEAPI_ASYNC_ALLOC))
+// / ``async_free`` free functions.
+#if defined(SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC)
 #define DPCTL_HAS_SYCL_MEMORY_POOL_EXT 1
 #else
 #define DPCTL_HAS_SYCL_MEMORY_POOL_EXT 0

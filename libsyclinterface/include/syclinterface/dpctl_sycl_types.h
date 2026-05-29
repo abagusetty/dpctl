@@ -86,7 +86,7 @@ typedef struct DPCTLOpaqueSyclUSM *DPCTLSyclUSMRef;
 
 /*!
  * @brief Opaque pointer to a SYCL memory pool object backed by the
- * ``sycl_ext_oneapi_memory_pool`` extension (or a fallback bookkeeping
+ * ``sycl_ext_oneapi_async_memory_alloc`` extension (or a fallback bookkeeping
  * struct when the extension is unavailable).
  *
  */

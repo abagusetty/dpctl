@@ -20,9 +20,8 @@
 ///
 /// \file
 /// C interface to a SYCL memory-pool object backed by the
-/// ``sycl_ext_oneapi_memory_pool`` and ``sycl_ext_oneapi_async_alloc``
-/// extensions, with a pass-through fallback when the extensions are
-/// not available.
+/// ``sycl_ext_oneapi_async_memory_alloc`` extension, with a
+/// pass-through fallback when the extension is not available.
 ///
 //===----------------------------------------------------------------------===//
 

@@ -10,8 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 * Added pluggable USM allocator hook (`dpctl.memory.set_allocator`,
   `get_allocator`, `reset_allocator`) and `dpctl.memory.MemoryPool`,
-  a stream-ordered pool backed by `sycl_ext_oneapi_memory_pool` /
-  `sycl_ext_oneapi_async_alloc` with a `sycl::malloc_*` fallback.
+  a stream-ordered pool backed by `sycl_ext_oneapi_async_memory_alloc`,
+  with a `sycl::malloc_*` fallback.
   Opt-in; default behavior unchanged. `MemoryPool(...)` constructs
   a private pool; `MemoryPool.get_default(...)` wraps the SYCL
   runtime's default pool (shared across dpctl, dpnp, and other
