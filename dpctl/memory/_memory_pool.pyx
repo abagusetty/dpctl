@@ -102,9 +102,12 @@ cdef class MemoryPool:
       runtime's default pool for the given ``(context, device,
       usm_type)``; all callers within the process share its cache.
 
-    :meth:`malloc` has the signature expected by the allocator hook
-    (``(nbytes, sycl_queue) -> _Memory``) and is the intended argument
-    to :func:`dpctl.memory.set_allocator`.
+    The pool object is itself callable with the allocator-hook
+    signature ``(nbytes, sycl_queue) -> _Memory``, so it can be
+    handed directly to :func:`dpctl.memory.set_allocator`::
+
+        pool = dpctl.memory.MemoryPool.get_default(usm_type="device")
+        dpctl.memory.set_allocator(pool)
 
     Args:
         sycl_queue (Optional[:class:`dpctl.SyclQueue`]):
@@ -226,6 +229,13 @@ cdef class MemoryPool:
         if self._pool_ref is NULL:
             return False
         return bool(DPCTLMemoryPool_IsDefault(self._pool_ref))
+
+    def __call__(self, Py_ssize_t nbytes, SyclQueue sycl_queue=None):
+        """Allocator-hook protocol: equivalent to :meth:`malloc`. Lets
+        users write ``dpctl.memory.set_allocator(pool)`` instead of
+        ``set_allocator(pool.malloc)``.
+        """
+        return self.malloc(nbytes, sycl_queue)
 
     def malloc(self, Py_ssize_t nbytes, SyclQueue sycl_queue=None):
         """Allocate ``nbytes`` bytes from the pool and return a

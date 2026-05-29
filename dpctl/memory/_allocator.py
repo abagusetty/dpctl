@@ -87,19 +87,48 @@ def _normalize_usm_type(usm_type: str) -> str:
     return usm_type_norm
 
 
+_SENTINEL = object()
+
+
+def _pool_from_allocator(allocator):
+    """If ``allocator`` is a :class:`MemoryPool` or a bound method of
+    one (e.g. ``pool.malloc``), return the underlying pool. Otherwise
+    return ``None``."""
+    from ._memory_pool import MemoryPool
+
+    if isinstance(allocator, MemoryPool):
+        return allocator
+    owner = getattr(allocator, "__self__", None)
+    if isinstance(owner, MemoryPool):
+        return owner
+    return None
+
+
 def set_allocator(
     allocator: Optional[Callable],
     *,
-    usm_type: str = "device",
-    sycl_device: Optional[dpctl.SyclDevice] = None,
+    usm_type=_SENTINEL,
+    sycl_device=_SENTINEL,
 ) -> None:
     """Install a USM allocator hook.
 
     Args:
-        allocator: A callable ``(nbytes, sycl_queue) -> _Memory``, or
-            ``None`` to remove the hook for the given
-            ``(usm_type, sycl_device)`` combination.
+        allocator: One of
+
+            * a :class:`dpctl.memory.MemoryPool` instance,
+            * a bound method of a ``MemoryPool`` (e.g. ``pool.malloc``),
+            * any callable ``(nbytes, sycl_queue) -> _Memory``,
+            * or ``None`` to remove the hook for the given
+              ``(usm_type, sycl_device)`` combination.
+
+            When a :class:`MemoryPool` (or its bound method) is passed,
+            ``usm_type`` and ``sycl_device`` default to the pool's
+            corresponding attributes; explicit kwargs override but must
+            be consistent with the pool's attributes (a mismatch is
+            rejected).
+
         usm_type: One of ``"device"``, ``"shared"``, or ``"host"``.
+            Required when ``allocator`` is a plain callable.
         sycl_device: An optional :class:`dpctl.SyclDevice`. ``None``
             installs the hook as the fallback for all devices that do
             not have a device-specific hook installed.
@@ -108,8 +137,33 @@ def set_allocator(
     fallback. If neither is installed, the allocation goes directly to
     ``sycl::malloc_*``.
     """
-    usm_type_norm = _normalize_usm_type(usm_type)
-    key = (usm_type_norm, _device_key(sycl_device))
+    pool = _pool_from_allocator(allocator) if allocator is not None else None
+    if pool is not None:
+        resolved_usm = pool.usm_type
+        resolved_dev = pool.sycl_device
+        if usm_type is not _SENTINEL:
+            if _normalize_usm_type(usm_type) != resolved_usm:
+                raise ValueError(
+                    f"usm_type={usm_type!r} conflicts with the pool's "
+                    f"usm_type={resolved_usm!r}"
+                )
+        if sycl_device is not _SENTINEL and sycl_device is not None:
+            if sycl_device != resolved_dev:
+                raise ValueError(
+                    "sycl_device argument conflicts with the pool's "
+                    "sycl_device"
+                )
+        usm_type_norm = resolved_usm
+        dev_key = _device_key(resolved_dev)
+    else:
+        usm_type_norm = _normalize_usm_type(
+            "device" if usm_type is _SENTINEL else usm_type
+        )
+        dev_key = _device_key(
+            None if sycl_device is _SENTINEL else sycl_device
+        )
+
+    key = (usm_type_norm, dev_key)
     with _lock:
         if allocator is None:
             _registry.pop(key, None)

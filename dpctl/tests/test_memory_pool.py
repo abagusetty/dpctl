@@ -361,6 +361,78 @@ def test_device_hook_does_not_affect_shared(clean_registry):
     del m
 
 
+def test_set_allocator_accepts_pool_directly(clean_registry):
+    """``set_allocator(pool)`` is equivalent to
+    ``set_allocator(pool.malloc, usm_type=pool.usm_type,
+    sycl_device=pool.sycl_device)``."""
+    q = _try_make_queue()
+    pool = dpm.MemoryPool(sycl_queue=q, usm_type="device")
+
+    dpm.set_allocator(pool)
+    installed = dpm.get_allocator(
+        usm_type="device", sycl_device=q.sycl_device
+    )
+    assert installed is pool
+
+    # Allocation goes through the pool.
+    m = dpm.MemoryUSMDevice(8192, queue=q)
+    assert m.nbytes == 8192
+    del m
+
+
+def test_set_allocator_accepts_pool_bound_method(clean_registry):
+    """``set_allocator(pool.malloc)`` also auto-detects the pool's
+    usm_type and sycl_device via the bound method's ``__self__``."""
+    q = _try_make_queue()
+    pool = dpm.MemoryPool(sycl_queue=q, usm_type="shared")
+
+    dpm.set_allocator(pool.malloc)
+    installed = dpm.get_allocator(
+        usm_type="shared", sycl_device=q.sycl_device
+    )
+    # The registry stores the exact callable passed in (a bound
+    # method); its __self__ is the pool.
+    assert installed.__self__ is pool
+
+    m = dpm.MemoryUSMShared(8192, queue=q)
+    assert m.nbytes == 8192
+    del m
+
+
+def test_set_allocator_pool_conflicting_kwargs_rejected(clean_registry):
+    """When a pool is passed, explicit kwargs that disagree with the
+    pool's attributes must raise."""
+    q = _try_make_queue()
+    pool = dpm.MemoryPool(sycl_queue=q, usm_type="device")
+    with pytest.raises(ValueError, match="usm_type"):
+        dpm.set_allocator(pool, usm_type="shared")
+
+
+def test_set_allocator_pool_matching_kwargs_accepted(clean_registry):
+    """Explicit kwargs that match the pool's attributes are allowed."""
+    q = _try_make_queue()
+    pool = dpm.MemoryPool(sycl_queue=q, usm_type="device")
+    dpm.set_allocator(
+        pool, usm_type="device", sycl_device=q.sycl_device
+    )
+    assert dpm.get_allocator(
+        usm_type="device", sycl_device=q.sycl_device
+    ) is pool
+
+
+def test_pool_is_callable_as_allocator():
+    """The pool itself is a callable conforming to the allocator
+    protocol (``__call__`` delegates to :meth:`malloc`)."""
+    q = _try_make_queue()
+    pool = dpm.MemoryPool(sycl_queue=q, usm_type="device")
+    m = pool(4096, q)
+    try:
+        assert isinstance(m, dpm.MemoryUSMDevice)
+        assert m.nbytes == 4096
+    finally:
+        del m
+
+
 def test_aligned_alloc_with_hook_warns_and_bypasses(clean_registry):
     """A non-zero ``alignment`` request bypasses the hook (most pools
     cannot honor arbitrary alignment) and emits a RuntimeWarning."""

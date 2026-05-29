@@ -42,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * A `RuntimeWarning` is now emitted when a USM allocation requests
   a non-zero `alignment` while a pool hook is installed (the hook
   is bypassed because most pools cannot honor arbitrary alignment).
+* `dpctl.memory.set_allocator` now accepts a `MemoryPool` (or its
+  `.malloc` bound method) directly and auto-extracts the pool's
+  `usm_type` and `sycl_device`; explicit kwargs override but must
+  not contradict the pool's attributes. The pool object is also
+  callable with the allocator-hook signature, so
+  `set_allocator(pool)` is equivalent to `set_allocator(pool.malloc)`.
 
 ### Fixed
 
