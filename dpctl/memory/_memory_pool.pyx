@@ -67,12 +67,19 @@ _UNINIT = object()
 
 def is_memory_pool_available():
     """Return ``True`` if libsyclinterface was built against a DPC++
-    that exposes the ``sycl_ext_oneapi_memory_pool`` and
-    ``sycl_ext_oneapi_async_alloc`` extensions, ``False`` otherwise.
+    that defines the ``SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC`` feature-
+    test macro (``sycl_ext_oneapi_async_memory_alloc``), ``False``
+    otherwise.
 
     When ``False`` :class:`MemoryPool` still works, but allocations
     go through plain ``sycl::malloc_*`` and frees through synchronous
-    ``sycl::free``.
+    ``sycl::free`` — no pool-side caching or stream-ordered free.
+
+    Note: a ``True`` here is a compile-time signal only. The device
+    must also report the ``ext_oneapi_async_memory_alloc`` aspect at
+    runtime for the pool fast path to be exercised; without the
+    aspect the underlying ``memory_pool`` constructor raises
+    ``errc::feature_not_supported``.
     """
     return bool(DPCTLMemoryPool_Available())
 
