@@ -605,6 +605,13 @@ cdef extern from "syclinterface/dpctl_sycl_memory_pool_interface.h":
         DPCTLSyclMemoryPoolRef PRef) nogil
     cdef size_t DPCTLMemoryPool_GetReservedBytes(
         DPCTLSyclMemoryPoolRef PRef) nogil
+    cdef void DPCTLMemoryPool_SetInstalled(
+        DPCTLSyclContextRef CRef,
+        DPCTLSyclDeviceRef DRef,
+        DPCTLSyclMemoryPoolRef PRef) nogil
+    cdef DPCTLSyclMemoryPoolRef DPCTLMemoryPool_GetInstalled(
+        DPCTLSyclContextRef CRef,
+        DPCTLSyclDeviceRef DRef) nogil
 
 cdef extern from "syclinterface/dpctl_sycl_extension_interface.h":
     cdef struct RawWorkGroupMemoryTy

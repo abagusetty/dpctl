@@ -166,7 +166,8 @@ def set_allocator(
     key = (usm_type_norm, dev_key)
     with _lock:
         if allocator is None:
-            _registry.pop(key, None)
+            removed = _registry.pop(key, None)
+            _sync_c_registry_on_remove(key, removed)
             return
         if not callable(allocator):
             raise TypeError(
@@ -174,6 +175,7 @@ def set_allocator(
                 f"got {type(allocator).__name__}"
             )
         _registry[key] = allocator
+        _sync_c_registry_on_install(key, allocator, pool)
 
 
 def get_allocator(
@@ -202,18 +204,47 @@ def reset_allocator(
     registry."""
     with _lock:
         if usm_type is None and sycl_device is None:
+            removed = list(_registry.items())
             _registry.clear()
+            for k, v in removed:
+                _sync_c_registry_on_remove(k, v)
             return
         if usm_type is not None:
             usm_type_norm = _normalize_usm_type(usm_type)
             if sycl_device is None:
                 for k in [k for k in _registry if k[0] == usm_type_norm]:
-                    _registry.pop(k, None)
+                    v = _registry.pop(k, None)
+                    _sync_c_registry_on_remove(k, v)
             else:
-                _registry.pop(
-                    (usm_type_norm, _device_key(sycl_device)), None
-                )
+                k = (usm_type_norm, _device_key(sycl_device))
+                v = _registry.pop(k, None)
+                _sync_c_registry_on_remove(k, v)
         else:
             dev_key = _device_key(sycl_device)
             for k in [k for k in _registry if k[1] == dev_key]:
-                _registry.pop(k, None)
+                v = _registry.pop(k, None)
+                _sync_c_registry_on_remove(k, v)
+
+
+def _sync_c_registry_on_install(key, allocator, pool) -> None:
+    """Mirror device-USM pool installs into the C-side registry so
+    C++ consumers (dpnp's smart_malloc_*) can find the pool without
+    going through Python."""
+    if pool is None or key[0] != "device" or key[1] is None:
+        return
+    from ._memory_pool import _install_device_pool
+
+    _install_device_pool(pool)
+
+
+def _sync_c_registry_on_remove(key, removed_value) -> None:
+    """Clear the matching C-side registry entry when a Python-side
+    device-USM hook for a specific device is removed."""
+    if key[0] != "device" or key[1] is None or removed_value is None:
+        return
+    pool = _pool_from_allocator(removed_value)
+    if pool is None:
+        return
+    from ._memory_pool import _uninstall_device_pool
+
+    _uninstall_device_pool(pool.sycl_context, pool.sycl_device)

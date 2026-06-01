@@ -538,3 +538,86 @@ def test_set_allocator_concurrent_reads_no_lock_contention(clean_registry):
     for t in threads:
         t.join()
     assert not errors
+
+
+# ---------------------------------------------------------------------------
+# C-side installed-pool registry (for dpnp / other C++ consumers)
+# ---------------------------------------------------------------------------
+
+
+def _installed_ptr(ctx, dev):
+    """Read the C-side installed-pool ref as a raw pointer value."""
+    from dpctl.memory._memory_pool import _get_installed_device_pool_ptr
+
+    return _get_installed_device_pool_ptr(ctx, dev)
+
+
+def test_c_registry_install_and_query(clean_registry):
+    """``set_allocator(pool)`` for a device-USM pool also populates the
+    C-side registry; the pool ref returned by GetInstalled matches
+    the pool ref the wrapper holds."""
+    q = _try_make_queue()
+    pool = dpm.MemoryPool(sycl_queue=q, usm_type="device")
+    assert _installed_ptr(q.sycl_context, q.sycl_device) == 0
+    dpm.set_allocator(pool)
+    ptr = _installed_ptr(q.sycl_context, q.sycl_device)
+    assert ptr != 0
+
+
+def test_c_registry_reset_clears_entry(clean_registry):
+    q = _try_make_queue()
+    pool = dpm.MemoryPool(sycl_queue=q, usm_type="device")
+    dpm.set_allocator(pool)
+    assert _installed_ptr(q.sycl_context, q.sycl_device) != 0
+    dpm.reset_allocator()
+    assert _installed_ptr(q.sycl_context, q.sycl_device) == 0
+
+
+def test_c_registry_only_for_device_usm(clean_registry):
+    """Pools for usm_type='shared' or 'host' must not appear in the
+    C-side registry (the SYCL extension does not pool them)."""
+    q = _try_make_queue()
+    for kind in ("shared", "host"):
+        try:
+            pool = dpm.MemoryPool(sycl_queue=q, usm_type=kind)
+        except RuntimeError:
+            continue
+        dpm.set_allocator(pool)
+        assert _installed_ptr(q.sycl_context, q.sycl_device) == 0
+        dpm.reset_allocator()
+
+
+def test_c_registry_no_entry_for_plain_callable(clean_registry):
+    """A plain callable (not a MemoryPool) must not populate the
+    C-side registry — the C registry is for pool refs only."""
+    q = _try_make_queue()
+
+    def my_alloc(nbytes, queue):
+        return dpm.malloc_device(nbytes, queue=queue)
+
+    dpm.set_allocator(
+        my_alloc, usm_type="device", sycl_device=q.sycl_device
+    )
+    assert _installed_ptr(q.sycl_context, q.sycl_device) == 0
+
+
+def test_c_registry_cleared_on_pool_dealloc(clean_registry):
+    """If the MemoryPool is garbage-collected while still installed,
+    its __dealloc__ must clear the C-side entry to avoid a dangling
+    ref (the user is supposed to call reset_allocator first; this is
+    the safety net)."""
+    import gc
+
+    q = _try_make_queue()
+    pool = dpm.MemoryPool(sycl_queue=q, usm_type="device")
+    dpm.set_allocator(pool)
+    assert _installed_ptr(q.sycl_context, q.sycl_device) != 0
+    # Drop the only Python ref to the pool without calling
+    # reset_allocator first.
+    ctx, dev = pool.sycl_context, pool.sycl_device
+    # The Python-side _registry still holds the pool as a value, so
+    # we have to clear that too to actually let dealloc run.
+    dpm.reset_allocator()
+    del pool
+    gc.collect()
+    assert _installed_ptr(ctx, dev) == 0

@@ -30,17 +30,21 @@ from dpctl._backend cimport (  # noqa: E211
     DPCTLMemoryPool_Create,
     DPCTLMemoryPool_CreateDefault,
     DPCTLMemoryPool_Delete,
+    DPCTLMemoryPool_GetInstalled,
     DPCTLMemoryPool_GetReservedBytes,
     DPCTLMemoryPool_GetUsedBytes,
     DPCTLMemoryPool_IsDefault,
     DPCTLMemoryPool_MallocOnQueue,
     DPCTLMemoryPool_ResetMemory,
+    DPCTLMemoryPool_SetInstalled,
     DPCTLMemoryPool_SetReleaseThreshold,
     DPCTLSyclMemoryPoolRef,
     DPCTLSyclQueueRef,
     DPCTLSyclUSMRef,
     _usm_type,
 )
+from dpctl._sycl_context cimport SyclContext
+from dpctl._sycl_device cimport SyclDevice
 from dpctl._sycl_queue cimport SyclQueue
 from dpctl._sycl_queue_manager cimport get_device_cached_queue
 from dpctl.memory._memory cimport (
@@ -52,6 +56,40 @@ from dpctl.memory._memory cimport (
 
 
 __all__ = ["MemoryPool", "is_memory_pool_available"]
+
+
+def _install_device_pool(MemoryPool pool not None):
+    """Register ``pool`` as the installed device-USM pool for its
+    ``(context, device)`` in the C-side registry consumed by C++
+    callers (e.g. dpnp's ``smart_malloc_*``). No-op when ``pool`` is
+    not a USM-device pool."""
+    cdef SyclContext ctx
+    cdef SyclDevice dev
+    if pool._usm_type != "device":
+        return
+    ctx = <SyclContext>pool._queue.sycl_context
+    dev = <SyclDevice>pool._queue.sycl_device
+    DPCTLMemoryPool_SetInstalled(
+        ctx.get_context_ref(), dev.get_device_ref(), pool._pool_ref
+    )
+
+
+def _uninstall_device_pool(SyclContext ctx not None, SyclDevice dev not None):
+    """Clear the C-side device-USM pool registry entry for
+    ``(ctx, dev)``."""
+    DPCTLMemoryPool_SetInstalled(
+        ctx.get_context_ref(), dev.get_device_ref(), NULL
+    )
+
+
+def _get_installed_device_pool_ptr(SyclContext ctx not None,
+                                   SyclDevice dev not None):
+    """Return the raw ``DPCTLSyclMemoryPoolRef`` (as a Python int) for
+    the installed device-USM pool, or 0 if no pool is installed. Used
+    by the tests; user code should not need this."""
+    return <size_t>DPCTLMemoryPool_GetInstalled(
+        ctx.get_context_ref(), dev.get_device_ref()
+    )
 
 
 # Key: (context_hash, device_hash, usm_kind_str). Lookup is protected
@@ -158,6 +196,22 @@ cdef class MemoryPool:
         self._usm_type = usm_type
 
     def __dealloc__(self):
+        cdef SyclContext ctx
+        cdef SyclDevice dev
+        # If this pool is currently the installed device-USM pool for
+        # its (context, device), clear the C-side registry entry
+        # before deleting our handle. Defensive: the standard contract
+        # is that the user calls reset_allocator() first.
+        if self._pool_ref is not NULL and self._usm_type == "device" \
+                and self._queue is not None:
+            ctx = <SyclContext>self._queue.sycl_context
+            dev = <SyclDevice>self._queue.sycl_device
+            if DPCTLMemoryPool_GetInstalled(
+                ctx.get_context_ref(), dev.get_device_ref()
+            ) == self._pool_ref:
+                DPCTLMemoryPool_SetInstalled(
+                    ctx.get_context_ref(), dev.get_device_ref(), NULL
+                )
         if self._pool_ref is not NULL:
             DPCTLMemoryPool_Delete(self._pool_ref)
             self._pool_ref = NULL

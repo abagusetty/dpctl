@@ -176,4 +176,38 @@ DPCTL_API
 size_t DPCTLMemoryPool_GetReservedBytes(
     __dpctl_keep const DPCTLSyclMemoryPoolRef PRef);
 
+/*!
+ * @brief Register ``PRef`` as the installed device-USM pool for the
+ * given ``(context, device)`` pair, or clear the entry when ``PRef``
+ * is ``nullptr``.
+ *
+ * The stored reference is non-owning; the caller is responsible for
+ * keeping the underlying ``MemoryPool`` alive while the entry is
+ * installed. Used by Python's ``dpctl.memory.set_allocator`` to make
+ * the installed pool reachable from C++ consumers (e.g. dpnp's
+ * ``smart_malloc_*``) without round-tripping through the Python
+ * registry.
+ *
+ * @ingroup MemoryPoolInterface
+ */
+DPCTL_API
+void DPCTLMemoryPool_SetInstalled(
+    __dpctl_keep const DPCTLSyclContextRef CRef,
+    __dpctl_keep const DPCTLSyclDeviceRef DRef,
+    __dpctl_keep const DPCTLSyclMemoryPoolRef PRef);
+
+/*!
+ * @brief Return the installed device-USM pool for the given
+ * ``(context, device)`` pair, or ``nullptr`` if no pool is installed.
+ *
+ * The returned reference is non-owning; the caller must not call
+ * ``DPCTLMemoryPool_Delete`` on it.
+ *
+ * @ingroup MemoryPoolInterface
+ */
+DPCTL_API
+__dpctl_keep DPCTLSyclMemoryPoolRef DPCTLMemoryPool_GetInstalled(
+    __dpctl_keep const DPCTLSyclContextRef CRef,
+    __dpctl_keep const DPCTLSyclDeviceRef DRef);
+
 DPCTL_C_EXTERN_C_END

@@ -38,8 +38,10 @@
 #include <sycl/ext/oneapi/experimental/async_alloc/memory_pool.hpp>
 #endif
 
+#include <mutex>
 #include <new>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 
 // The ``sycl_ext_oneapi_async_memory_alloc`` extension defines a
@@ -496,4 +498,99 @@ size_t DPCTLMemoryPool_GetReservedBytes(
 #else
     return 0;
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// Installed-pool registry (process-wide, non-owning).
+//
+// Mirrors the Python-side ``dpctl.memory._allocator._registry`` for
+// device-USM only. Lets C++ consumers (e.g. dpnp's smart_malloc_*)
+// look up the pool installed via ``dpctl.memory.set_allocator``
+// without round-tripping through Python.
+//
+// Entries are non-owning: the caller (Python's set_allocator) is
+// responsible for clearing the entry before letting the underlying
+// MemoryPool Python wrapper die. MemoryPool.__dealloc__ does this
+// automatically as a safety net.
+// ---------------------------------------------------------------------------
+namespace
+{
+using InstalledKey = std::pair<std::size_t, std::size_t>;
+
+struct InstalledKeyHash
+{
+    std::size_t operator()(const InstalledKey &k) const noexcept
+    {
+        return k.first ^ (k.second + 0x9e3779b97f4a7c15ULL + (k.first << 6) +
+                          (k.first >> 2));
+    }
+};
+
+std::unordered_map<InstalledKey, DPCTLSyclMemoryPoolRef, InstalledKeyHash> &
+installed_registry()
+{
+    static std::unordered_map<InstalledKey, DPCTLSyclMemoryPoolRef,
+                              InstalledKeyHash>
+        reg;
+    return reg;
+}
+
+std::mutex &installed_registry_mutex()
+{
+    static std::mutex m;
+    return m;
+}
+
+bool make_installed_key(DPCTLSyclContextRef CRef,
+                        DPCTLSyclDeviceRef DRef,
+                        InstalledKey &out) noexcept
+{
+    if (!CRef || !DRef) {
+        return false;
+    }
+    try {
+        auto *C = unwrap<sycl::context>(CRef);
+        auto *D = unwrap<sycl::device>(DRef);
+        out = {std::hash<sycl::context>{}(*C), std::hash<sycl::device>{}(*D)};
+        return true;
+    } catch (std::exception const &e) {
+        error_handler(e, __FILE__, __func__, __LINE__);
+        return false;
+    }
+}
+} // namespace
+
+DPCTL_API
+void DPCTLMemoryPool_SetInstalled(
+    __dpctl_keep const DPCTLSyclContextRef CRef,
+    __dpctl_keep const DPCTLSyclDeviceRef DRef,
+    __dpctl_keep const DPCTLSyclMemoryPoolRef PRef)
+{
+    InstalledKey key;
+    if (!make_installed_key(CRef, DRef, key)) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(installed_registry_mutex());
+    auto &reg = installed_registry();
+    if (PRef == nullptr) {
+        reg.erase(key);
+    }
+    else {
+        reg[key] = PRef;
+    }
+}
+
+DPCTL_API
+__dpctl_keep DPCTLSyclMemoryPoolRef DPCTLMemoryPool_GetInstalled(
+    __dpctl_keep const DPCTLSyclContextRef CRef,
+    __dpctl_keep const DPCTLSyclDeviceRef DRef)
+{
+    InstalledKey key;
+    if (!make_installed_key(CRef, DRef, key)) {
+        return nullptr;
+    }
+    std::lock_guard<std::mutex> lock(installed_registry_mutex());
+    auto &reg = installed_registry();
+    auto it = reg.find(key);
+    return (it == reg.end()) ? nullptr : it->second;
 }
