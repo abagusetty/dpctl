@@ -17,7 +17,17 @@
 # distutils: language = c++
 # cython: language_level=3
 
-"""Pool-backed USM allocator for :mod:`dpctl.memory`."""
+"""USM-device memory pool for :mod:`dpctl.memory`.
+
+A :class:`MemoryPool` is identified by its ``(context, device)`` pair.
+Only USM-device allocations are pooled — the underlying
+``sycl_ext_oneapi_async_memory_alloc`` extension does not currently
+support pooled shared / host allocations.
+
+The queue used at allocation or free time is supplied per-call and
+mirrors the contract of ``DPCTLmalloc_device(size, QRef)`` and
+``DPCTLfree_with_queue(MRef, QRef)``.
+"""
 
 import threading
 import weakref
@@ -25,7 +35,7 @@ import weakref
 import dpctl
 
 from dpctl._backend cimport (  # noqa: E211
-    DPCTLMemoryPool_AsyncFreeOnQueue,
+    DPCTLMemoryPool_AsyncFree,
     DPCTLMemoryPool_Available,
     DPCTLMemoryPool_Create,
     DPCTLMemoryPool_CreateDefault,
@@ -34,43 +44,32 @@ from dpctl._backend cimport (  # noqa: E211
     DPCTLMemoryPool_GetReservedBytes,
     DPCTLMemoryPool_GetUsedBytes,
     DPCTLMemoryPool_IsDefault,
-    DPCTLMemoryPool_MallocOnQueue,
+    DPCTLMemoryPool_Malloc,
     DPCTLMemoryPool_ResetMemory,
     DPCTLMemoryPool_SetInstalled,
     DPCTLMemoryPool_SetReleaseThreshold,
     DPCTLSyclMemoryPoolRef,
     DPCTLSyclQueueRef,
     DPCTLSyclUSMRef,
-    _usm_type,
 )
 from dpctl._sycl_context cimport SyclContext
 from dpctl._sycl_device cimport SyclDevice
 from dpctl._sycl_queue cimport SyclQueue
 from dpctl._sycl_queue_manager cimport get_device_cached_queue
-from dpctl.memory._memory cimport (
-    MemoryUSMDevice,
-    MemoryUSMHost,
-    MemoryUSMShared,
-    _Memory,
-)
+from dpctl.memory._memory cimport MemoryUSMDevice, _Memory
 
 
 __all__ = ["MemoryPool", "is_memory_pool_available"]
 
 
 def _install_device_pool(MemoryPool pool not None):
-    """Register ``pool`` as the installed device-USM pool for its
+    """Register ``pool`` as the installed USM-device pool for its
     ``(context, device)`` in the C-side registry consumed by C++
-    callers (e.g. dpnp's ``smart_malloc_*``). No-op when ``pool`` is
-    not a USM-device pool."""
-    cdef SyclContext ctx
-    cdef SyclDevice dev
-    if pool._usm_type != "device":
-        return
-    ctx = <SyclContext>pool._queue.sycl_context
-    dev = <SyclDevice>pool._queue.sycl_device
+    callers (e.g. dpnp's ``smart_malloc_device``)."""
     DPCTLMemoryPool_SetInstalled(
-        ctx.get_context_ref(), dev.get_device_ref(), pool._pool_ref
+        pool._context.get_context_ref(),
+        pool._device.get_device_ref(),
+        pool._pool_ref,
     )
 
 
@@ -92,12 +91,12 @@ def _get_installed_device_pool_ptr(SyclContext ctx not None,
     )
 
 
-# Key: (context_hash, device_hash, usm_kind_str). Lookup is protected
-# by ``_default_pool_lock`` to make get_default a strict singleton.
+# Key: (context_hash, device_hash). Lookup protected by
+# ``_default_pool_lock`` to make get_default a strict singleton.
 _default_pool_cache = weakref.WeakValueDictionary()
 _default_pool_lock = threading.Lock()
 
-# Sentinel passed via ``MemoryPool(sycl_queue=_UNINIT)`` to skip pool
+# Sentinel passed via ``MemoryPool(sycl_device=_UNINIT)`` to skip pool
 # construction in ``__cinit__``. Used by ``get_default`` to avoid
 # wasting a SYCL pool object on the cache-miss path.
 _UNINIT = object()
@@ -110,8 +109,9 @@ def is_memory_pool_available():
     otherwise.
 
     When ``False`` :class:`MemoryPool` still works, but allocations
-    go through plain ``sycl::malloc_*`` and frees through synchronous
-    ``sycl::free`` — no pool-side caching or stream-ordered free.
+    go through plain ``sycl::malloc_device`` and frees through
+    synchronous ``sycl::free`` — no pool-side caching or stream-
+    ordered free.
 
     Note: a ``True`` here is a compile-time signal only. The device
     must also report the ``ext_oneapi_async_memory_alloc`` aspect at
@@ -122,125 +122,119 @@ def is_memory_pool_available():
     return bool(DPCTLMemoryPool_Available())
 
 
-cdef inline _usm_type _usm_type_str_to_enum(str usm_type):
-    if usm_type == "device":
-        return _usm_type._USM_DEVICE
-    elif usm_type == "shared":
-        return _usm_type._USM_SHARED
-    elif usm_type == "host":
-        return _usm_type._USM_HOST
-    raise ValueError(
-        "usm_type must be one of 'device', 'shared', 'host'; "
-        f"got {usm_type!r}"
-    )
+cdef inline SyclContext _default_context_for(SyclDevice dev):
+    """Return the dpctl-cached default context for ``dev`` (the one
+    every ``dpctl.SyclQueue(dev)`` shares)."""
+    cdef SyclQueue q = get_device_cached_queue(dev)
+    return <SyclContext>q.sycl_context
 
 
 cdef class MemoryPool:
-    """MemoryPool(sycl_queue=None, usm_type='device')
+    """MemoryPool(sycl_device=None)
 
-    A SYCL memory pool bound to a queue's device/context.
+    A SYCL USM-device memory pool identified by its ``(context,
+    device)`` pair. The queue used for allocation / free is supplied
+    per-call (see :meth:`malloc`) and must share the pool's context.
 
     Construction modes:
 
-    * ``MemoryPool(sycl_queue=q, usm_type=...)`` constructs a private
-      pool with an isolated cache.
+    * ``MemoryPool(sycl_device=dev)`` constructs a private pool with
+      an isolated cache for ``dev`` (and ``dev``'s dpctl-cached
+      default context).
     * :meth:`MemoryPool.get_default` returns a wrapper around the SYCL
-      runtime's default pool for the given ``(context, device,
-      usm_type)``; all callers within the process share its cache.
+      runtime's default pool for the given ``(context, device)``; all
+      callers within the process share its cache.
 
     The pool object is itself callable with the allocator-hook
-    signature ``(nbytes, sycl_queue) -> _Memory``, so it can be
-    handed directly to :func:`dpctl.memory.set_allocator`::
+    signature ``(nbytes, sycl_queue) -> MemoryUSMDevice``, so it can
+    be handed directly to :func:`dpctl.memory.set_allocator`::
 
-        pool = dpctl.memory.MemoryPool.get_default(usm_type="device")
+        pool = dpctl.memory.MemoryPool.get_default()
         dpctl.memory.set_allocator(pool)
 
     Args:
-        sycl_queue (Optional[:class:`dpctl.SyclQueue`]):
-            Queue whose device and context the pool is bound to. If
-            ``None``, a cached default-constructed queue is used.
-        usm_type (str):
-            One of ``"device"`` (default), ``"shared"``, or ``"host"``.
+        sycl_device (Optional[:class:`dpctl.SyclDevice`]):
+            Device the pool serves allocations for. If ``None``, a
+            default-constructed :class:`dpctl.SyclDevice` is used.
     """
 
-    def __cinit__(self, *, sycl_queue=None, str usm_type="device"):
-        cdef _usm_type kind
+    def __cinit__(self, *, sycl_device=None):
         cdef DPCTLSyclMemoryPoolRef pref = NULL
+        cdef SyclDevice dev
+        cdef SyclContext ctx
         self._pool_ref = NULL
-        self._queue = None
-        self._usm_type = None
+        self._context = None
+        self._device = None
 
-        if sycl_queue is _UNINIT:
+        if sycl_device is _UNINIT:
             # Deferred init: caller (e.g. get_default) populates fields.
             return
 
-        if sycl_queue is None:
-            sycl_queue = get_device_cached_queue(dpctl.SyclDevice())
-        elif not isinstance(sycl_queue, SyclQueue):
+        if sycl_device is None:
+            dev = dpctl.SyclDevice()
+        elif isinstance(sycl_device, SyclDevice):
+            dev = <SyclDevice>sycl_device
+        else:
             raise TypeError(
-                "sycl_queue must be a dpctl.SyclQueue instance or None; "
-                f"got {type(sycl_queue).__name__}"
+                "sycl_device must be a dpctl.SyclDevice instance or None; "
+                f"got {type(sycl_device).__name__}"
             )
 
-        kind = _usm_type_str_to_enum(usm_type)
+        ctx = _default_context_for(dev)
 
         pref = DPCTLMemoryPool_Create(
-            (<SyclQueue>sycl_queue).get_queue_ref(), kind
+            ctx.get_context_ref(), dev.get_device_ref()
         )
         if pref is NULL:
             raise RuntimeError(
-                f"Failed to create SYCL memory pool for usm_type={usm_type!r}"
+                "Failed to create SYCL USM-device memory pool"
             )
         self._pool_ref = pref
-        self._queue = <SyclQueue>sycl_queue
-        self._usm_type = usm_type
+        self._context = ctx
+        self._device = dev
 
     def __dealloc__(self):
-        cdef SyclContext ctx
-        cdef SyclDevice dev
         # If this pool is currently the installed device-USM pool for
         # its (context, device), clear the C-side registry entry
         # before deleting our handle. Defensive: the standard contract
         # is that the user calls reset_allocator() first.
-        if self._pool_ref is not NULL and self._usm_type == "device" \
-                and self._queue is not None:
-            ctx = <SyclContext>self._queue.sycl_context
-            dev = <SyclDevice>self._queue.sycl_device
+        if self._pool_ref is not NULL \
+                and self._context is not None and self._device is not None:
             if DPCTLMemoryPool_GetInstalled(
-                ctx.get_context_ref(), dev.get_device_ref()
+                self._context.get_context_ref(),
+                self._device.get_device_ref(),
             ) == self._pool_ref:
                 DPCTLMemoryPool_SetInstalled(
-                    ctx.get_context_ref(), dev.get_device_ref(), NULL
+                    self._context.get_context_ref(),
+                    self._device.get_device_ref(),
+                    NULL,
                 )
         if self._pool_ref is not NULL:
             DPCTLMemoryPool_Delete(self._pool_ref)
             self._pool_ref = NULL
 
     @staticmethod
-    def get_default(*, SyclQueue sycl_queue=None, str usm_type="device"):
+    def get_default(*, SyclDevice sycl_device=None):
         """Return a :class:`MemoryPool` wrapper around the SYCL
-        runtime's default memory pool for the given
-        ``(context, device, usm_type)``.
+        runtime's default USM-device memory pool for the given
+        ``(context, device)``.
 
         Repeated calls with equivalent arguments return the same
         Python wrapper object (compared with ``is``).
         """
-        cdef _usm_type kind
         cdef DPCTLSyclMemoryPoolRef pref = NULL
         cdef MemoryPool obj
+        cdef SyclDevice dev
+        cdef SyclContext ctx
 
-        if sycl_queue is None:
-            sycl_queue = get_device_cached_queue(dpctl.SyclDevice())
+        if sycl_device is None:
+            dev = dpctl.SyclDevice()
+        else:
+            dev = sycl_device
 
-        # Validate the USM type string up-front so we never grow the
-        # cache on a bad argument.
-        kind = _usm_type_str_to_enum(usm_type)
+        ctx = _default_context_for(dev)
 
-        cache_key = (
-            hash(sycl_queue.sycl_context),
-            hash(sycl_queue.sycl_device),
-            usm_type,
-        )
+        cache_key = (hash(ctx), hash(dev))
         # Double-checked lookup under the lock so that concurrent
         # callers strictly share one wrapper per cache key.
         with _default_pool_lock:
@@ -249,40 +243,29 @@ cdef class MemoryPool:
                 return existing
 
             pref = DPCTLMemoryPool_CreateDefault(
-                sycl_queue.get_queue_ref(), kind
+                ctx.get_context_ref(), dev.get_device_ref()
             )
             if pref is NULL:
                 raise RuntimeError(
-                    "Failed to obtain SYCL default memory pool for "
-                    f"usm_type={usm_type!r}"
+                    "Failed to obtain SYCL default USM-device memory pool"
                 )
 
-            obj = MemoryPool(sycl_queue=_UNINIT)
+            obj = MemoryPool(sycl_device=_UNINIT)
             obj._pool_ref = pref
-            obj._queue = sycl_queue
-            obj._usm_type = usm_type
+            obj._context = ctx
+            obj._device = dev
             _default_pool_cache[cache_key] = obj
             return obj
 
     @property
-    def sycl_queue(self):
-        """The :class:`dpctl.SyclQueue` this pool is bound to."""
-        return self._queue
-
-    @property
     def sycl_device(self):
-        """The :class:`dpctl.SyclDevice` of the pool's queue."""
-        return self._queue.sycl_device
+        """The :class:`dpctl.SyclDevice` this pool serves."""
+        return self._device
 
     @property
     def sycl_context(self):
-        """The :class:`dpctl.SyclContext` of the pool's queue."""
-        return self._queue.sycl_context
-
-    @property
-    def usm_type(self):
-        """The USM allocation kind this pool serves."""
-        return self._usm_type
+        """The :class:`dpctl.SyclContext` this pool is bound to."""
+        return self._context
 
     @property
     def is_default(self):
@@ -292,52 +275,48 @@ cdef class MemoryPool:
             return False
         return bool(DPCTLMemoryPool_IsDefault(self._pool_ref))
 
-    def __call__(self, Py_ssize_t nbytes, SyclQueue sycl_queue=None):
+    def __call__(self, Py_ssize_t nbytes, SyclQueue sycl_queue not None):
         """Allocator-hook protocol: equivalent to :meth:`malloc`. Lets
         users write ``dpctl.memory.set_allocator(pool)`` instead of
         ``set_allocator(pool.malloc)``.
         """
         return self.malloc(nbytes, sycl_queue)
 
-    def malloc(self, Py_ssize_t nbytes, SyclQueue sycl_queue=None):
-        """Allocate ``nbytes`` bytes from the pool and return a
-        :class:`_Memory` instance.
+    def malloc(self, Py_ssize_t nbytes, SyclQueue sycl_queue not None):
+        """Allocate ``nbytes`` bytes of USM-device memory from the pool
+        and return a :class:`MemoryUSMDevice` instance.
 
-        When ``sycl_queue`` is provided it must share the pool's SYCL
-        context. The returned allocation is stream-ordered against
-        ``sycl_queue``; the eventual pool-return is also ordered
-        against ``sycl_queue``, preserving lifetime safety relative to
-        the work that consumed the allocation. When ``sycl_queue`` is
-        ``None`` the pool's bound queue is used.
+        Args:
+            nbytes: Number of bytes to allocate. Must be positive.
+            sycl_queue: Queue used to stream-order the allocation.
+                The eventual pool-return is also ordered against this
+                queue, preserving lifetime safety relative to the work
+                that consumed the allocation. ``sycl_queue`` must
+                share the pool's SYCL context.
         """
         cdef DPCTLSyclUSMRef p = NULL
         cdef DPCTLSyclQueueRef alloc_qref
         cdef DPCTLSyclMemoryPoolRef pool_ref
         cdef _Memory base
-        cdef SyclQueue alloc_q
 
         if nbytes <= 0:
             raise ValueError(
                 "Number of bytes for pool allocation must be positive"
             )
-        if sycl_queue is None:
-            alloc_q = self._queue
-        else:
-            if sycl_queue.sycl_context != self._queue.sycl_context:
-                raise ValueError(
-                    "sycl_queue passed to MemoryPool.malloc must share "
-                    "the pool's SYCL context"
-                )
-            alloc_q = sycl_queue
+        if sycl_queue.sycl_context != self._context:
+            raise ValueError(
+                "sycl_queue passed to MemoryPool.malloc must share "
+                "the pool's SYCL context"
+            )
 
         # Extract raw refs before releasing the GIL; the underlying
-        # SYCL objects remain valid because ``alloc_q`` and ``self``
-        # are held as Python locals.
-        alloc_qref = alloc_q.get_queue_ref()
+        # SYCL objects remain valid because ``sycl_queue`` and
+        # ``self`` are held as Python locals.
+        alloc_qref = sycl_queue.get_queue_ref()
         pool_ref = self._pool_ref
 
         with nogil:
-            p = DPCTLMemoryPool_MallocOnQueue(
+            p = DPCTLMemoryPool_Malloc(
                 pool_ref, alloc_qref, <size_t>nbytes
             )
         if p is NULL:
@@ -350,21 +329,16 @@ cdef class MemoryPool:
         try:
             base._cinit_from_pool(
                 nbytes,
-                alloc_q,
+                sycl_queue,
                 self,
                 pool_ref,
                 p,
             )
         except Exception:
-            DPCTLMemoryPool_AsyncFreeOnQueue(pool_ref, alloc_qref, p)
+            DPCTLMemoryPool_AsyncFree(pool_ref, alloc_qref, p)
             raise
 
-        if self._usm_type == "device":
-            return MemoryUSMDevice(base)
-        elif self._usm_type == "shared":
-            return MemoryUSMShared(base)
-        else:
-            return MemoryUSMHost(base)
+        return MemoryUSMDevice(base)
 
     def set_release_threshold(self, size_t threshold):
         """Raise the pool's release threshold in bytes. Below the
@@ -375,22 +349,21 @@ cdef class MemoryPool:
         """
         DPCTLMemoryPool_SetReleaseThreshold(self._pool_ref, threshold)
 
-    def reset_memory(self):
+    def reset_memory(self, SyclQueue sycl_queue=None):
         """Best-effort eviction of unused cached blocks.
 
         Drives the pool's release threshold to 0 (asking the runtime
-        to release the cache at its next opportunity) and synchronizes
-        the pool's bound queue so that any in-flight stream-ordered
-        frees are flushed before returning. The SYCL runtime decides
-        when to actually release blocks back to the driver, and only
-        blocks not currently in use can be reclaimed. No-op when
-        :func:`is_memory_pool_available` returns ``False``.
+        to release the cache at its next opportunity). When
+        ``sycl_queue`` is provided, also synchronizes that queue so
+        any in-flight stream-ordered frees on it are flushed before
+        returning. No-op when :func:`is_memory_pool_available`
+        returns ``False``.
         """
         if not is_memory_pool_available():
             return
         DPCTLMemoryPool_ResetMemory(self._pool_ref)
-        if self._queue is not None:
-            self._queue.wait()
+        if sycl_queue is not None:
+            sycl_queue.wait()
 
     def used_bytes(self):
         """Number of bytes currently handed out by the pool to live

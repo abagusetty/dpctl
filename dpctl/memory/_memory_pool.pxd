@@ -18,13 +18,14 @@
 # cython: language_level=3
 
 from dpctl._backend cimport DPCTLSyclMemoryPoolRef
-from dpctl._sycl_queue cimport SyclQueue
+from dpctl._sycl_context cimport SyclContext
+from dpctl._sycl_device cimport SyclDevice
 
 
 cdef class MemoryPool:
     cdef DPCTLSyclMemoryPoolRef _pool_ref
-    cdef SyclQueue _queue
-    cdef str _usm_type
+    cdef SyclContext _context
+    cdef SyclDevice _device
     # Required for weakref support; consumed by the WeakValueDictionary
     # backing ``MemoryPool.get_default``.
     cdef object __weakref__

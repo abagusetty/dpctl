@@ -14,7 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Pluggable USM allocator hook for :mod:`dpctl.memory`."""
+"""Pluggable USM-device allocator hook for :mod:`dpctl.memory`.
+
+The registry maps a :class:`dpctl.SyclDevice` (or ``None`` for the
+global fallback) to an allocator callable. Only USM-device
+allocations consult the registry; USM-shared and USM-host
+allocations always go directly to ``sycl::malloc_*`` because the
+underlying ``sycl_ext_oneapi_async_memory_alloc`` extension does not
+support pooled shared / host allocations.
+"""
 
 from __future__ import annotations
 
@@ -29,19 +37,21 @@ __all__ = [
     "set_allocator",
 ]
 
-_VALID_USM_TYPES = frozenset({"device", "shared", "host"})
-
-# Registry of installed hooks. CPython's GIL makes both ``dict.get`` and
-# single-key mutations atomic, so the hot read path in
-# ``_Memory._cinit_alloc`` reads this dict *without* taking ``_lock``.
-# ``_lock`` is held only by writers (``set_allocator`` /
+# Registry of installed device-USM hooks. CPython's GIL makes both
+# ``dict.get`` and single-key mutations atomic, so the hot read path
+# in ``_Memory._cinit_alloc`` reads this dict *without* taking
+# ``_lock``. ``_lock`` is held only by writers (``set_allocator`` /
 # ``reset_allocator``) to serialize against each other.
+#
+# Key: hash(SyclDevice) for a per-device hook, or None for the
+# global fallback (applies to any device that has no specific hook).
 _registry: dict = {}
 _lock = threading.RLock()
 
 # Thread-local bypass counter used by ``malloc_device`` and friends to
-# suspend hook lookup on the current thread for the duration of a direct
-# allocation. The Cython hot path reads ``_bypass_tls.depth`` directly.
+# suspend hook lookup on the current thread for the duration of a
+# direct allocation. The Cython hot path reads ``_bypass_tls.depth``
+# directly.
 _bypass_tls = threading.local()
 
 
@@ -73,20 +83,6 @@ def _device_key(sycl_device: Optional[dpctl.SyclDevice]) -> Optional[int]:
     return hash(sycl_device)
 
 
-def _normalize_usm_type(usm_type: str) -> str:
-    if not isinstance(usm_type, str):
-        raise TypeError(
-            f"usm_type must be a string, got {type(usm_type).__name__}"
-        )
-    usm_type_norm = usm_type.lower()
-    if usm_type_norm not in _VALID_USM_TYPES:
-        raise ValueError(
-            f"usm_type must be one of {sorted(_VALID_USM_TYPES)}; "
-            f"got {usm_type!r}"
-        )
-    return usm_type_norm
-
-
 _SENTINEL = object()
 
 
@@ -107,140 +103,120 @@ def _pool_from_allocator(allocator):
 def set_allocator(
     allocator: Optional[Callable],
     *,
-    usm_type=_SENTINEL,
     sycl_device=_SENTINEL,
 ) -> None:
-    """Install a USM allocator hook.
+    """Install a USM-device allocator hook.
 
     Args:
         allocator: One of
 
             * a :class:`dpctl.memory.MemoryPool` instance,
             * a bound method of a ``MemoryPool`` (e.g. ``pool.malloc``),
-            * any callable ``(nbytes, sycl_queue) -> _Memory``,
+            * any callable ``(nbytes, sycl_queue) -> MemoryUSMDevice``,
             * or ``None`` to remove the hook for the given
-              ``(usm_type, sycl_device)`` combination.
+              ``sycl_device`` (or the global fallback if
+              ``sycl_device`` is not provided).
 
             When a :class:`MemoryPool` (or its bound method) is passed,
-            ``usm_type`` and ``sycl_device`` default to the pool's
-            corresponding attributes; explicit kwargs override but must
-            be consistent with the pool's attributes (a mismatch is
-            rejected).
+            ``sycl_device`` defaults to the pool's
+            :attr:`MemoryPool.sycl_device`; if explicitly provided it
+            must agree with the pool.
 
-        usm_type: One of ``"device"``, ``"shared"``, or ``"host"``.
-            Required when ``allocator`` is a plain callable.
         sycl_device: An optional :class:`dpctl.SyclDevice`. ``None``
             installs the hook as the fallback for all devices that do
             not have a device-specific hook installed.
 
     A device-specific hook takes precedence over a device-``None``
-    fallback. If neither is installed, the allocation goes directly to
-    ``sycl::malloc_*``.
+    fallback. If neither is installed, the device allocation goes
+    directly to ``sycl::malloc_device``.
+
+    Only USM-device allocations are affected; USM-shared and USM-host
+    allocations always go directly to ``sycl::malloc_*``.
     """
     pool = _pool_from_allocator(allocator) if allocator is not None else None
     if pool is not None:
-        resolved_usm = pool.usm_type
         resolved_dev = pool.sycl_device
-        if usm_type is not _SENTINEL:
-            if _normalize_usm_type(usm_type) != resolved_usm:
-                raise ValueError(
-                    f"usm_type={usm_type!r} conflicts with the pool's "
-                    f"usm_type={resolved_usm!r}"
-                )
         if sycl_device is not _SENTINEL and sycl_device is not None:
             if sycl_device != resolved_dev:
                 raise ValueError(
                     "sycl_device argument conflicts with the pool's "
                     "sycl_device"
                 )
-        usm_type_norm = resolved_usm
         dev_key = _device_key(resolved_dev)
     else:
-        usm_type_norm = _normalize_usm_type(
-            "device" if usm_type is _SENTINEL else usm_type
-        )
         dev_key = _device_key(
             None if sycl_device is _SENTINEL else sycl_device
         )
 
-    key = (usm_type_norm, dev_key)
     with _lock:
         if allocator is None:
-            removed = _registry.pop(key, None)
-            _sync_c_registry_on_remove(key, removed)
+            removed = _registry.pop(dev_key, None)
+            _sync_c_registry_on_remove(dev_key, removed)
             return
         if not callable(allocator):
             raise TypeError(
                 "allocator must be callable or None; "
                 f"got {type(allocator).__name__}"
             )
-        _registry[key] = allocator
-        _sync_c_registry_on_install(key, allocator, pool)
+        _registry[dev_key] = allocator
+        _sync_c_registry_on_install(dev_key, allocator, pool)
 
 
 def get_allocator(
     *,
-    usm_type: str = "device",
     sycl_device: Optional[dpctl.SyclDevice] = None,
 ) -> Optional[Callable]:
-    """Return the allocator hook installed for a given
-    ``(usm_type, sycl_device)`` combination, or ``None`` if no hook
+    """Return the USM-device allocator hook installed for the given
+    ``sycl_device``, falling back to the device-``None`` global hook
+    if no per-device hook is registered. Returns ``None`` if no hook
     matches."""
-    usm_type_norm = _normalize_usm_type(usm_type)
     dev_key = _device_key(sycl_device)
     if dev_key is not None:
-        specific = _registry.get((usm_type_norm, dev_key))
+        specific = _registry.get(dev_key)
         if specific is not None:
             return specific
-    return _registry.get((usm_type_norm, None))
+    return _registry.get(None)
 
 
 def reset_allocator(
     *,
-    usm_type: Optional[str] = None,
     sycl_device: Optional[dpctl.SyclDevice] = None,
 ) -> None:
-    """Remove allocator hooks. With no arguments, clears the entire
-    registry."""
+    """Remove USM-device allocator hooks.
+
+    With no arguments, clears the entire registry. With
+    ``sycl_device``, clears only that device's hook. To clear the
+    global fallback specifically, pass ``sycl_device=None``
+    explicitly (which is the default when no argument is given, so
+    the no-arg call clears everything by being unambiguous).
+    """
     with _lock:
-        if usm_type is None and sycl_device is None:
+        if sycl_device is None:
             removed = list(_registry.items())
             _registry.clear()
             for k, v in removed:
                 _sync_c_registry_on_remove(k, v)
             return
-        if usm_type is not None:
-            usm_type_norm = _normalize_usm_type(usm_type)
-            if sycl_device is None:
-                for k in [k for k in _registry if k[0] == usm_type_norm]:
-                    v = _registry.pop(k, None)
-                    _sync_c_registry_on_remove(k, v)
-            else:
-                k = (usm_type_norm, _device_key(sycl_device))
-                v = _registry.pop(k, None)
-                _sync_c_registry_on_remove(k, v)
-        else:
-            dev_key = _device_key(sycl_device)
-            for k in [k for k in _registry if k[1] == dev_key]:
-                v = _registry.pop(k, None)
-                _sync_c_registry_on_remove(k, v)
+        dev_key = _device_key(sycl_device)
+        v = _registry.pop(dev_key, None)
+        _sync_c_registry_on_remove(dev_key, v)
 
 
-def _sync_c_registry_on_install(key, allocator, pool) -> None:
+def _sync_c_registry_on_install(dev_key, allocator, pool) -> None:
     """Mirror device-USM pool installs into the C-side registry so
-    C++ consumers (dpnp's smart_malloc_*) can find the pool without
-    going through Python."""
-    if pool is None or key[0] != "device" or key[1] is None:
+    C++ consumers (dpnp's smart_malloc_device) can find the pool
+    without going through Python."""
+    if pool is None or dev_key is None:
         return
     from ._memory_pool import _install_device_pool
 
     _install_device_pool(pool)
 
 
-def _sync_c_registry_on_remove(key, removed_value) -> None:
+def _sync_c_registry_on_remove(dev_key, removed_value) -> None:
     """Clear the matching C-side registry entry when a Python-side
     device-USM hook for a specific device is removed."""
-    if key[0] != "device" or key[1] is None or removed_value is None:
+    if dev_key is None or removed_value is None:
         return
     pool = _pool_from_allocator(removed_value)
     if pool is None:

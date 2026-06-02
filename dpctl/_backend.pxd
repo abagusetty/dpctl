@@ -575,24 +575,18 @@ cdef extern from "syclinterface/dpctl_sycl_usm_interface.h":
 cdef extern from "syclinterface/dpctl_sycl_memory_pool_interface.h":
     cdef bint DPCTLMemoryPool_Available()
     cdef DPCTLSyclMemoryPoolRef DPCTLMemoryPool_Create(
-        DPCTLSyclQueueRef QRef,
-        _usm_type usm_type) nogil
+        DPCTLSyclContextRef CRef,
+        DPCTLSyclDeviceRef DRef) nogil
     cdef DPCTLSyclMemoryPoolRef DPCTLMemoryPool_CreateDefault(
-        DPCTLSyclQueueRef QRef,
-        _usm_type usm_type) nogil
+        DPCTLSyclContextRef CRef,
+        DPCTLSyclDeviceRef DRef) nogil
     cdef void DPCTLMemoryPool_Delete(DPCTLSyclMemoryPoolRef PRef)
     cdef bint DPCTLMemoryPool_IsDefault(DPCTLSyclMemoryPoolRef PRef)
     cdef DPCTLSyclUSMRef DPCTLMemoryPool_Malloc(
         DPCTLSyclMemoryPoolRef PRef,
-        size_t size) nogil
-    cdef DPCTLSyclUSMRef DPCTLMemoryPool_MallocOnQueue(
-        DPCTLSyclMemoryPoolRef PRef,
         DPCTLSyclQueueRef QRef,
         size_t size) nogil
     cdef void DPCTLMemoryPool_AsyncFree(
-        DPCTLSyclMemoryPoolRef PRef,
-        DPCTLSyclUSMRef MRef) nogil
-    cdef void DPCTLMemoryPool_AsyncFreeOnQueue(
         DPCTLSyclMemoryPoolRef PRef,
         DPCTLSyclQueueRef QRef,
         DPCTLSyclUSMRef MRef) nogil

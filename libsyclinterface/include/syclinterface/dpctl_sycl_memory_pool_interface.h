@@ -19,9 +19,14 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// C interface to a SYCL memory-pool object backed by the
+/// C interface to a SYCL USM-device memory-pool object backed by the
 /// ``sycl_ext_oneapi_async_memory_alloc`` extension, with a
 /// pass-through fallback when the extension is not available.
+///
+/// A memory pool's identity is its ``(context, device)`` pair. The
+/// queue passed to ``Malloc`` / ``AsyncFree`` is purely for
+/// stream-ordering of the allocation and free operations and must
+/// share the pool's context.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -51,23 +56,26 @@ DPCTL_API
 bool DPCTLMemoryPool_Available();
 
 /*!
- * @brief Create a private memory pool bound to a SYCL queue and USM type.
+ * @brief Create a private USM-device memory pool for a given context
+ * and device.
  *
- * @param  QRef       SYCL queue whose device/context the pool is bound to.
- * @param  usm_type   One of ``DPCTL_USM_DEVICE``, ``DPCTL_USM_SHARED``,
- *                    or ``DPCTL_USM_HOST``.
+ * The ``sycl_ext_oneapi_async_memory_alloc`` extension only supports
+ * pooled device allocations; shared and host pools are not exposed.
+ *
+ * @param  CRef       SYCL context the pool is associated with.
+ * @param  DRef       SYCL device the pool is associated with.
  * @return Pool handle, freed with ``DPCTLMemoryPool_Delete``, or
  *         ``nullptr`` on failure.
  * @ingroup MemoryPoolInterface
  */
 DPCTL_API
 __dpctl_give DPCTLSyclMemoryPoolRef
-DPCTLMemoryPool_Create(__dpctl_keep const DPCTLSyclQueueRef QRef,
-                       DPCTLSyclUSMType usm_type);
+DPCTLMemoryPool_Create(__dpctl_keep const DPCTLSyclContextRef CRef,
+                       __dpctl_keep const DPCTLSyclDeviceRef DRef);
 
 /*!
- * @brief Obtain a handle to the SYCL runtime's default memory pool for
- * the queue's ``(context, device, usm_type)`` tuple.
+ * @brief Obtain a handle to the SYCL runtime's default USM-device
+ * memory pool for the given ``(context, device)`` pair.
  *
  * The underlying pool is a runtime-managed singleton; the returned
  * handle does not own it.
@@ -76,8 +84,8 @@ DPCTLMemoryPool_Create(__dpctl_keep const DPCTLSyclQueueRef QRef,
  */
 DPCTL_API
 __dpctl_give DPCTLSyclMemoryPoolRef
-DPCTLMemoryPool_CreateDefault(__dpctl_keep const DPCTLSyclQueueRef QRef,
-                              DPCTLSyclUSMType usm_type);
+DPCTLMemoryPool_CreateDefault(__dpctl_keep const DPCTLSyclContextRef CRef,
+                              __dpctl_keep const DPCTLSyclDeviceRef DRef);
 
 /*!
  * @brief Destroy a memory pool handle. Outstanding allocations remain
@@ -99,45 +107,29 @@ bool DPCTLMemoryPool_IsDefault(
     __dpctl_keep const DPCTLSyclMemoryPoolRef PRef);
 
 /*!
- * @brief Allocate USM memory from a pool, ordered against the pool's
- * bound queue.
+ * @brief Allocate USM memory from a pool, stream-ordered against
+ * ``QRef``. ``QRef`` must share the pool's SYCL context. The queue
+ * argument is mandatory and mirrors the contract of
+ * ``DPCTLmalloc_device(size, QRef)``.
  * @ingroup MemoryPoolInterface
  */
 DPCTL_API
 __dpctl_give DPCTLSyclUSMRef
 DPCTLMemoryPool_Malloc(__dpctl_keep const DPCTLSyclMemoryPoolRef PRef,
+                       __dpctl_keep const DPCTLSyclQueueRef QRef,
                        size_t size);
 
 /*!
- * @brief Allocate USM memory from a pool, ordered against ``QRef``.
- * ``QRef`` must share the pool's SYCL context.
- * @ingroup MemoryPoolInterface
- */
-DPCTL_API
-__dpctl_give DPCTLSyclUSMRef DPCTLMemoryPool_MallocOnQueue(
-    __dpctl_keep const DPCTLSyclMemoryPoolRef PRef,
-    __dpctl_keep const DPCTLSyclQueueRef QRef,
-    size_t size);
-
-/*!
- * @brief Stream-ordered free of a pool-allocated pointer against the
- * pool's bound queue.
+ * @brief Stream-ordered free of a pool-allocated pointer against
+ * ``QRef``. ``QRef`` must share the pool's SYCL context. The queue
+ * argument is mandatory and mirrors the contract of
+ * ``DPCTLfree_with_queue(MRef, QRef)``.
  * @ingroup MemoryPoolInterface
  */
 DPCTL_API
 void DPCTLMemoryPool_AsyncFree(__dpctl_keep const DPCTLSyclMemoryPoolRef PRef,
+                               __dpctl_keep const DPCTLSyclQueueRef QRef,
                                __dpctl_take DPCTLSyclUSMRef MRef);
-
-/*!
- * @brief Stream-ordered free of a pool-allocated pointer against
- * ``QRef``. ``QRef`` must share the pool's SYCL context.
- * @ingroup MemoryPoolInterface
- */
-DPCTL_API
-void DPCTLMemoryPool_AsyncFreeOnQueue(
-    __dpctl_keep const DPCTLSyclMemoryPoolRef PRef,
-    __dpctl_keep const DPCTLSyclQueueRef QRef,
-    __dpctl_take DPCTLSyclUSMRef MRef);
 
 /*!
  * @brief Set the pool's release threshold (analog of

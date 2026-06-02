@@ -106,14 +106,17 @@ cdef object _allocator_bypass_tls = None
 
 
 cdef inline object _registry_lookup(str usm_kind, object sycl_device):
-    """Lock-free registry lookup. Returns the installed hook callable
-    or None when no hook applies."""
+    """Lock-free registry lookup. Returns the installed device-USM
+    hook callable, or None when no hook applies (including for any
+    ``usm_kind`` other than ``"device"`` — the pool extension only
+    supports device allocations)."""
     global _allocator_registry, _allocator_bypass_tls
     cdef object reg = _allocator_registry
     cdef object tls
     cdef object hook
-    cdef object key
     cdef object dev_key
+    if usm_kind != "device":
+        return None
     if reg is None:
         from dpctl.memory._allocator import (
             _registry as _r,
@@ -128,10 +131,10 @@ cdef inline object _registry_lookup(str usm_kind, object sycl_device):
         return None
     dev_key = hash(sycl_device) if sycl_device is not None else None
     if dev_key is not None:
-        hook = reg.get((usm_kind, dev_key))
+        hook = reg.get(dev_key)
         if hook is not None:
             return hook
-    return reg.get((usm_kind, None))
+    return reg.get(None)
 
 
 # Set to True by an atexit handler so __dealloc__ paths can skip work

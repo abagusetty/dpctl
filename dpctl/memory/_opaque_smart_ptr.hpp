@@ -135,12 +135,7 @@ struct PoolFreeUserData
 inline void _pool_return_invoke(void *user_data)
 {
     auto *ud = reinterpret_cast<PoolFreeUserData *>(user_data);
-    if (ud->queue) {
-        DPCTLMemoryPool_AsyncFreeOnQueue(ud->pool, ud->queue, ud->usm_ptr);
-    }
-    else {
-        DPCTLMemoryPool_AsyncFree(ud->pool, ud->usm_ptr);
-    }
+    DPCTLMemoryPool_AsyncFree(ud->pool, ud->queue, ud->usm_ptr);
     delete ud;
 }
 

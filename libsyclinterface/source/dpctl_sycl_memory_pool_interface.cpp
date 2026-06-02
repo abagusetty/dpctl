@@ -133,14 +133,16 @@ inline void safe_increase_threshold(P &p, size_t threshold)
 namespace
 {
 
-// ``is_default`` records whether ``pool`` points at a private
-// (heap-allocated, owned) object or at a copy of the runtime's
-// default-pool handle. Only used for diagnostics; both flavors of
-// handle are deleted the same way (see DPCTLMemoryPool_Delete).
+// Pool identity is the (context, device) pair. The SYCL extension
+// currently only supports USM-device allocations, so ``kind`` is
+// implicitly ``sycl::usm::alloc::device``. ``is_default`` records
+// whether the stored handle came from CreateDefault (true) or
+// Create (false); both flavors are deleted via the same
+// delete-handle path.
 struct DPCTLPoolImpl
 {
-    sycl::queue queue;
-    sycl::usm::alloc kind;
+    sycl::context context;
+    sycl::device device;
     bool is_default;
 #if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
     sycl::ext::oneapi::experimental::memory_pool *pool;
@@ -148,8 +150,10 @@ struct DPCTLPoolImpl
     void *pool; // always nullptr; kept for ABI symmetry
 #endif
 
-    DPCTLPoolImpl(const sycl::queue &q, sycl::usm::alloc k, bool default_pool)
-        : queue(q), kind(k), is_default(default_pool), pool(nullptr)
+    DPCTLPoolImpl(const sycl::context &c,
+                  const sycl::device &d,
+                  bool default_pool)
+        : context(c), device(d), is_default(default_pool), pool(nullptr)
     {
     }
 };
@@ -162,20 +166,6 @@ inline DPCTLPoolImpl *unwrap_pool(DPCTLSyclMemoryPoolRef ref)
 inline DPCTLSyclMemoryPoolRef wrap_pool(DPCTLPoolImpl *impl)
 {
     return reinterpret_cast<DPCTLSyclMemoryPoolRef>(impl);
-}
-
-inline sycl::usm::alloc dpctl_to_sycl_usm(DPCTLSyclUSMType t)
-{
-    switch (t) {
-    case DPCTLSyclUSMType::DPCTL_USM_DEVICE:
-        return sycl::usm::alloc::device;
-    case DPCTLSyclUSMType::DPCTL_USM_SHARED:
-        return sycl::usm::alloc::shared;
-    case DPCTLSyclUSMType::DPCTL_USM_HOST:
-        return sycl::usm::alloc::host;
-    default:
-        return sycl::usm::alloc::unknown;
-    }
 }
 
 } // namespace
@@ -192,27 +182,23 @@ bool DPCTLMemoryPool_Available()
 
 DPCTL_API
 __dpctl_give DPCTLSyclMemoryPoolRef
-DPCTLMemoryPool_Create(__dpctl_keep const DPCTLSyclQueueRef QRef,
-                       DPCTLSyclUSMType usm_type)
+DPCTLMemoryPool_Create(__dpctl_keep const DPCTLSyclContextRef CRef,
+                       __dpctl_keep const DPCTLSyclDeviceRef DRef)
 {
-    if (!QRef) {
-        error_handler("Input QRef is nullptr.", __FILE__, __func__, __LINE__);
-        return nullptr;
-    }
-    const sycl::usm::alloc kind = dpctl_to_sycl_usm(usm_type);
-    if (kind == sycl::usm::alloc::unknown) {
-        error_handler("Unknown USM type passed to DPCTLMemoryPool_Create.",
-                      __FILE__, __func__, __LINE__);
+    if (!CRef || !DRef) {
+        error_handler("Input CRef or DRef is nullptr.", __FILE__, __func__,
+                      __LINE__);
         return nullptr;
     }
     try {
-        auto Q = unwrap<sycl::queue>(QRef);
+        auto C = unwrap<sycl::context>(CRef);
+        auto D = unwrap<sycl::device>(DRef);
         auto impl = std::unique_ptr<DPCTLPoolImpl>(
-            new DPCTLPoolImpl(*Q, kind, /*default_pool=*/false));
+            new DPCTLPoolImpl(*C, *D, /*default_pool=*/false));
 #if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
         namespace syclex = sycl::ext::oneapi::experimental;
-        impl->pool = new syclex::memory_pool(Q->get_context(),
-                                             Q->get_device(), kind);
+        impl->pool =
+            new syclex::memory_pool(*C, *D, sycl::usm::alloc::device);
 #endif
         return wrap_pool(impl.release());
     } catch (std::exception const &e) {
@@ -223,32 +209,27 @@ DPCTLMemoryPool_Create(__dpctl_keep const DPCTLSyclQueueRef QRef,
 
 DPCTL_API
 __dpctl_give DPCTLSyclMemoryPoolRef
-DPCTLMemoryPool_CreateDefault(__dpctl_keep const DPCTLSyclQueueRef QRef,
-                              DPCTLSyclUSMType usm_type)
+DPCTLMemoryPool_CreateDefault(__dpctl_keep const DPCTLSyclContextRef CRef,
+                              __dpctl_keep const DPCTLSyclDeviceRef DRef)
 {
-    if (!QRef) {
-        error_handler("Input QRef is nullptr.", __FILE__, __func__, __LINE__);
-        return nullptr;
-    }
-    const sycl::usm::alloc kind = dpctl_to_sycl_usm(usm_type);
-    if (kind == sycl::usm::alloc::unknown) {
-        error_handler(
-            "Unknown USM type passed to DPCTLMemoryPool_CreateDefault.",
-            __FILE__, __func__, __LINE__);
+    if (!CRef || !DRef) {
+        error_handler("Input CRef or DRef is nullptr.", __FILE__, __func__,
+                      __LINE__);
         return nullptr;
     }
     try {
-        auto Q = unwrap<sycl::queue>(QRef);
+        auto C = unwrap<sycl::context>(CRef);
+        auto D = unwrap<sycl::device>(DRef);
         auto impl = std::unique_ptr<DPCTLPoolImpl>(
-            new DPCTLPoolImpl(*Q, kind, /*default_pool=*/true));
+            new DPCTLPoolImpl(*C, *D, /*default_pool=*/true));
 #if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
         namespace syclex = sycl::ext::oneapi::experimental;
         // The memory_pool returned by ext_oneapi_get_default_memory_pool
         // is a handle/reference type; copying it does NOT duplicate the
         // underlying runtime-owned pool object.
-        sycl::context ctx = Q->get_context();
         syclex::memory_pool default_pool =
-            ctx.ext_oneapi_get_default_memory_pool(Q->get_device(), kind);
+            C->ext_oneapi_get_default_memory_pool(
+                *D, sycl::usm::alloc::device);
         impl->pool = new syclex::memory_pool(default_pool);
 #endif
         return wrap_pool(impl.release());
@@ -297,16 +278,8 @@ void *pool_malloc_on(DPCTLPoolImpl *impl, const sycl::queue &q, size_t size)
     namespace syclex = sycl::ext::oneapi::experimental;
     return syclex::async_malloc_from_pool(q, size, *impl->pool);
 #else
-    switch (impl->kind) {
-    case sycl::usm::alloc::device:
-        return sycl::malloc_device(size, q);
-    case sycl::usm::alloc::shared:
-        return sycl::malloc_shared(size, q);
-    case sycl::usm::alloc::host:
-        return sycl::malloc_host(size, q);
-    default:
-        return nullptr;
-    }
+    (void)impl;
+    return sycl::malloc_device(size, q);
 #endif
 }
 
@@ -329,31 +302,8 @@ void pool_free_on(DPCTLPoolImpl *impl, const sycl::queue &q, void *ptr)
 DPCTL_API
 __dpctl_give DPCTLSyclUSMRef
 DPCTLMemoryPool_Malloc(__dpctl_keep const DPCTLSyclMemoryPoolRef PRef,
+                       __dpctl_keep const DPCTLSyclQueueRef QRef,
                        size_t size)
-{
-    if (!PRef) {
-        error_handler("Input PRef is nullptr.", __FILE__, __func__, __LINE__);
-        return nullptr;
-    }
-    if (size == 0) {
-        error_handler("Zero-byte allocation requested.", __FILE__, __func__,
-                      __LINE__);
-        return nullptr;
-    }
-    DPCTLPoolImpl *impl = unwrap_pool(PRef);
-    try {
-        return wrap<void>(pool_malloc_on(impl, impl->queue, size));
-    } catch (std::exception const &e) {
-        error_handler(e, __FILE__, __func__, __LINE__);
-        return nullptr;
-    }
-}
-
-DPCTL_API
-__dpctl_give DPCTLSyclUSMRef DPCTLMemoryPool_MallocOnQueue(
-    __dpctl_keep const DPCTLSyclMemoryPoolRef PRef,
-    __dpctl_keep const DPCTLSyclQueueRef QRef,
-    size_t size)
 {
     if (!PRef || !QRef) {
         error_handler("Input PRef or QRef is nullptr.", __FILE__, __func__,
@@ -377,28 +327,8 @@ __dpctl_give DPCTLSyclUSMRef DPCTLMemoryPool_MallocOnQueue(
 
 DPCTL_API
 void DPCTLMemoryPool_AsyncFree(__dpctl_keep const DPCTLSyclMemoryPoolRef PRef,
+                               __dpctl_keep const DPCTLSyclQueueRef QRef,
                                __dpctl_take DPCTLSyclUSMRef MRef)
-{
-    if (!PRef) {
-        error_handler("Input PRef is nullptr.", __FILE__, __func__, __LINE__);
-        return;
-    }
-    if (!MRef) {
-        return;
-    }
-    DPCTLPoolImpl *impl = unwrap_pool(PRef);
-    try {
-        pool_free_on(impl, impl->queue, unwrap<void>(MRef));
-    } catch (std::exception const &e) {
-        error_handler(e, __FILE__, __func__, __LINE__);
-    }
-}
-
-DPCTL_API
-void DPCTLMemoryPool_AsyncFreeOnQueue(
-    __dpctl_keep const DPCTLSyclMemoryPoolRef PRef,
-    __dpctl_keep const DPCTLSyclQueueRef QRef,
-    __dpctl_take DPCTLSyclUSMRef MRef)
 {
     if (!PRef || !QRef) {
         error_handler("Input PRef or QRef is nullptr.", __FILE__, __func__,

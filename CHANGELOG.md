@@ -8,46 +8,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-* Added pluggable USM allocator hook (`dpctl.memory.set_allocator`,
-  `get_allocator`, `reset_allocator`) and `dpctl.memory.MemoryPool`,
-  a stream-ordered pool backed by `sycl_ext_oneapi_memory_pool` /
-  `sycl_ext_oneapi_async_alloc` with a `sycl::malloc_*` fallback.
-  Opt-in; default behavior unchanged. `MemoryPool(...)` constructs
-  a private pool; `MemoryPool.get_default(...)` wraps the SYCL
-  runtime's default pool (shared across dpctl, dpnp, and other
-  SYCL-using code in the same process). Supports
-  `set_release_threshold`, `reset_memory`, and
-  `used_bytes` / `total_bytes` / `free_bytes` counters. Bypass
-  entry points `dpctl.memory.malloc_device`, `malloc_shared`,
-  `malloc_host` route directly to the underlying SYCL allocator
-  regardless of any installed hook.
-
-### Change
-
-* `MemoryPool.malloc(nbytes, sycl_queue=q)` now honors the queue
-  argument for stream-ordering of both the allocation and the
-  eventual async-free, and rejects queues that do not share the
-  pool's SYCL context.
-* `_Memory._cinit_alloc` no longer takes a lock on the no-hook path;
-  the registry is read GIL-atomically. `MemoryPool.get_default` now
+* Added a pluggable USM-device allocator hook
+  (`dpctl.memory.set_allocator`, `get_allocator`, `reset_allocator`)
+  and `dpctl.memory.MemoryPool`, a stream-ordered USM-device pool
+  backed by `sycl_ext_oneapi_async_memory_alloc` with a
+  `sycl::malloc_device` fallback. Opt-in; default behavior unchanged.
+  The pool is identified by its ``(context, device)`` pair (the
+  extension only supports USM-device allocations). Construct a
+  private pool via ``MemoryPool(sycl_device=dev)`` or wrap the SYCL
+  runtime's default pool via ``MemoryPool.get_default()``. The pool
+  is itself callable with the allocator-hook signature, so
+  ``set_allocator(pool)`` activates it for the pool's device.
+  ``malloc`` and ``reset_memory`` take the queue as a per-call
+  argument, mirroring ``DPCTLmalloc_device(size, QRef)`` and
+  ``DPCTLfree_with_queue(MRef, QRef)``. Supports
+  ``set_release_threshold``, ``used_bytes`` / ``total_bytes`` /
+  ``free_bytes`` counters. Bypass entry points
+  ``dpctl.memory.malloc_device``, ``malloc_shared``, ``malloc_host``
+  route directly to the underlying SYCL allocator regardless of any
+  installed hook. A C-side registry (``DPCTLMemoryPool_SetInstalled``
+  / ``GetInstalled``) lets C++ consumers (e.g. dpnp's
+  ``smart_malloc_device``) look up the installed pool without going
+  through Python. `_Memory._cinit_alloc` reads the registry without
+  taking a lock on the no-hook hot path; writes are serialized.
+  Pool-backed `_Memory` skips its pool callback during interpreter
+  shutdown to avoid use-after-free. ``MemoryPool.get_default``
   serializes its cache insert so concurrent callers strictly share
-  one wrapper. `__dealloc__` of pool-backed allocations skips the
-  pool callback during interpreter shutdown to avoid use-after-free.
-* `MemoryPool.reset_memory()` now also synchronizes the pool's
-  queue so pending stream-ordered frees are flushed before the
-  runtime's threshold-driven release runs.
-* SYCL `memory_pool` member-name detection is now SFINAE-guarded;
-  `used_bytes`/`total_bytes`/threshold setters degrade to no-ops
-  instead of breaking the build when DPC++ uses alternate names.
-* A `RuntimeWarning` is now emitted when a USM allocation requests
-  a non-zero `alignment` while a pool hook is installed (the hook
-  is bypassed because most pools cannot honor arbitrary alignment).
-* `dpctl.memory.set_allocator` now accepts a `MemoryPool` (or its
-  `.malloc` bound method) directly and auto-extracts the pool's
-  `usm_type` and `sycl_device`; explicit kwargs override but must
-  not contradict the pool's attributes. The pool object is also
-  callable with the allocator-hook signature, so
-  `set_allocator(pool)` is equivalent to `set_allocator(pool.malloc)`.
+  one wrapper. A ``RuntimeWarning`` is emitted when a USM-device
+  allocation requests a non-zero ``alignment`` while a pool hook is
+  installed (the hook is bypassed because most pools cannot honor
+  arbitrary alignment).
 
 ### Fixed
 
