@@ -48,6 +48,8 @@ from dpctl._backend cimport (  # noqa: E211
     DPCTLMemoryPool_ResetMemory,
     DPCTLMemoryPool_SetInstalled,
     DPCTLMemoryPool_SetReleaseThreshold,
+    DPCTLSyclContextRef,
+    DPCTLSyclDeviceRef,
     DPCTLSyclMemoryPoolRef,
     DPCTLSyclQueueRef,
     DPCTLSyclUSMRef,
@@ -402,7 +404,7 @@ cdef class MemoryPool:
 # ---------------------------------------------------------------------------
 
 cdef api DPCTLSyclMemoryPoolRef MemoryPool_GetInstalled(
-        DPCTLSyclContextRef cref, DPCTLSyclDeviceRef dref) nogil:
+        DPCTLSyclContextRef cref, DPCTLSyclDeviceRef dref) noexcept nogil:
     """Return the installed USM-device pool for ``(cref, dref)`` or
     NULL if no pool is installed."""
     return DPCTLMemoryPool_GetInstalled(cref, dref)
@@ -411,7 +413,7 @@ cdef api DPCTLSyclMemoryPoolRef MemoryPool_GetInstalled(
 cdef api DPCTLSyclUSMRef MemoryPool_Malloc(
         DPCTLSyclMemoryPoolRef pref,
         DPCTLSyclQueueRef qref,
-        size_t size) nogil:
+        size_t size) noexcept nogil:
     """Allocate ``size`` bytes from ``pref`` stream-ordered against
     ``qref``. ``qref`` must share the pool's SYCL context."""
     return DPCTLMemoryPool_Malloc(pref, qref, size)
@@ -420,7 +422,7 @@ cdef api DPCTLSyclUSMRef MemoryPool_Malloc(
 cdef api void MemoryPool_AsyncFree(
         DPCTLSyclMemoryPoolRef pref,
         DPCTLSyclQueueRef qref,
-        DPCTLSyclUSMRef mref) nogil:
+        DPCTLSyclUSMRef mref) noexcept nogil:
     """Stream-ordered free of ``mref`` against ``qref``. ``qref``
     must share the pool's SYCL context."""
     DPCTLMemoryPool_AsyncFree(pref, qref, mref)
