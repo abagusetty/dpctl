@@ -45,7 +45,10 @@
 #include "dpctl/_sycl_queue_api.h"
 #include "dpctl/memory/_memory.h"
 #include "dpctl/memory/_memory_api.h"
-#include "dpctl/memory/_memory_pool.h"
+// _memory_pool exposes only ``cdef api`` free functions (no
+// ``cdef public api class``), so Cython does not emit a
+// ``_memory_pool.h`` -- the ``_api.h`` alone carries everything
+// downstream consumers need.
 #include "dpctl/memory/_memory_pool_api.h"
 #include "dpctl/program/_program.h"
 #include "dpctl/program/_program_api.h"
