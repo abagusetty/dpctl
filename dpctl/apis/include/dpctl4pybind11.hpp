@@ -85,6 +85,16 @@ public:
                               DPCTLSyclQueueRef,
                               PyObject *);
 
+    // memory pool (USM-device only); see dpctl.memory._memory_pool
+    DPCTLSyclMemoryPoolRef (*MemoryPool_GetInstalled_)(DPCTLSyclContextRef,
+                                                       DPCTLSyclDeviceRef);
+    DPCTLSyclUSMRef (*MemoryPool_Malloc_)(DPCTLSyclMemoryPoolRef,
+                                          DPCTLSyclQueueRef,
+                                          size_t);
+    void (*MemoryPool_AsyncFree_)(DPCTLSyclMemoryPoolRef,
+                                  DPCTLSyclQueueRef,
+                                  DPCTLSyclUSMRef);
+
     // program
     DPCTLSyclKernelRef (*SyclKernel_GetKernelRef_)(PySyclKernelObject *);
     PySyclKernelObject *(*SyclKernel_Make_)(DPCTLSyclKernelRef, const char *);
@@ -174,7 +184,9 @@ private:
           Memory_GetUsmPointer_(nullptr), Memory_GetOpaquePointer_(nullptr),
           Memory_GetContextRef_(nullptr), Memory_GetQueueRef_(nullptr),
           Memory_GetNumBytes_(nullptr), Memory_Make_(nullptr),
-          SyclKernel_GetKernelRef_(nullptr), SyclKernel_Make_(nullptr),
+          MemoryPool_GetInstalled_(nullptr), MemoryPool_Malloc_(nullptr),
+          MemoryPool_AsyncFree_(nullptr), SyclKernel_GetKernelRef_(nullptr),
+          SyclKernel_Make_(nullptr),
           SyclKernelBundle_GetKernelBundleRef_(nullptr),
           SyclKernelBundle_Make_(nullptr), default_sycl_queue_{},
           default_usm_memory_{}, as_usm_memory_{}
@@ -226,6 +238,11 @@ private:
         this->Memory_GetQueueRef_ = Memory_GetQueueRef;
         this->Memory_GetNumBytes_ = Memory_GetNumBytes;
         this->Memory_Make_ = Memory_Make;
+
+        // dpctl.memory pool API (USM-device only)
+        this->MemoryPool_GetInstalled_ = MemoryPool_GetInstalled;
+        this->MemoryPool_Malloc_ = MemoryPool_Malloc;
+        this->MemoryPool_AsyncFree_ = MemoryPool_AsyncFree;
 
         // dpctl.program API
         this->SyclKernel_GetKernelRef_ = SyclKernel_GetKernelRef;
