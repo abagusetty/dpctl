@@ -33,7 +33,10 @@
 
 #include <sycl/sycl.hpp>
 
-#if __has_include(<sycl/ext/oneapi/experimental/async_alloc/memory_pool.hpp>)
+// The ``sycl_ext_oneapi_async_memory_alloc`` extension headers are
+// not pulled in by <sycl/sycl.hpp>; include them explicitly when the
+// compiler advertises the extension via SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC.
+#if defined(SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC)
 #include <sycl/ext/oneapi/experimental/async_alloc/async_alloc.hpp>
 #include <sycl/ext/oneapi/experimental/async_alloc/memory_pool.hpp>
 #endif
@@ -44,19 +47,9 @@
 #include <unordered_map>
 #include <utility>
 
-// The ``sycl_ext_oneapi_async_memory_alloc`` extension defines a
-// single feature-test macro (``SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC``)
-// that gates both the ``memory_pool`` class and the ``async_malloc``
-// / ``async_free`` free functions.
-#if defined(SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC)
-#define DPCTL_HAS_SYCL_MEMORY_POOL_EXT 1
-#else
-#define DPCTL_HAS_SYCL_MEMORY_POOL_EXT 0
-#endif
-
 using namespace dpctl::syclinterface;
 
-#if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
+#if defined(SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC)
 namespace
 {
 // SFINAE detection for memory_pool member functions whose names differ
@@ -144,7 +137,7 @@ struct DPCTLPoolImpl
     sycl::context context;
     sycl::device device;
     bool is_default;
-#if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
+#if defined(SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC)
     sycl::ext::oneapi::experimental::memory_pool *pool;
 #else
     void *pool; // always nullptr; kept for ABI symmetry
@@ -173,7 +166,7 @@ inline DPCTLSyclMemoryPoolRef wrap_pool(DPCTLPoolImpl *impl)
 DPCTL_API
 bool DPCTLMemoryPool_Available()
 {
-#if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
+#if defined(SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC)
     return true;
 #else
     return false;
@@ -195,7 +188,7 @@ DPCTLMemoryPool_Create(__dpctl_keep const DPCTLSyclContextRef CRef,
         auto D = unwrap<sycl::device>(DRef);
         auto impl = std::unique_ptr<DPCTLPoolImpl>(
             new DPCTLPoolImpl(*C, *D, /*default_pool=*/false));
-#if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
+#if defined(SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC)
         namespace syclex = sycl::ext::oneapi::experimental;
         impl->pool =
             new syclex::memory_pool(*C, *D, sycl::usm::alloc::device);
@@ -222,7 +215,7 @@ DPCTLMemoryPool_CreateDefault(__dpctl_keep const DPCTLSyclContextRef CRef,
         auto D = unwrap<sycl::device>(DRef);
         auto impl = std::unique_ptr<DPCTLPoolImpl>(
             new DPCTLPoolImpl(*C, *D, /*default_pool=*/true));
-#if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
+#if defined(SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC)
         namespace syclex = sycl::ext::oneapi::experimental;
         // The memory_pool returned by ext_oneapi_get_default_memory_pool
         // is a handle/reference type; copying it does NOT duplicate the
@@ -246,7 +239,7 @@ void DPCTLMemoryPool_Delete(__dpctl_take DPCTLSyclMemoryPoolRef PRef)
         return;
     }
     DPCTLPoolImpl *impl = unwrap_pool(PRef);
-#if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
+#if defined(SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC)
     // ``impl->pool`` is always our heap-allocated handle, not the
     // runtime-owned pool itself; deletion of the handle does not affect
     // the underlying pool.
@@ -274,7 +267,7 @@ namespace
 
 void *pool_malloc_on(DPCTLPoolImpl *impl, const sycl::queue &q, size_t size)
 {
-#if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
+#if defined(SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC)
     namespace syclex = sycl::ext::oneapi::experimental;
     return syclex::async_malloc_from_pool(q, size, *impl->pool);
 #else
@@ -285,7 +278,7 @@ void *pool_malloc_on(DPCTLPoolImpl *impl, const sycl::queue &q, size_t size)
 
 void pool_free_on(DPCTLPoolImpl *impl, const sycl::queue &q, void *ptr)
 {
-#if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
+#if defined(SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC)
     namespace syclex = sycl::ext::oneapi::experimental;
     (void)impl;
     syclex::async_free(q, ptr);
@@ -355,7 +348,7 @@ void DPCTLMemoryPool_SetReleaseThreshold(
         error_handler("Input PRef is nullptr.", __FILE__, __func__, __LINE__);
         return;
     }
-#if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
+#if defined(SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC)
     DPCTLPoolImpl *impl = unwrap_pool(PRef);
     try {
         safe_increase_threshold(*impl->pool, threshold);
@@ -375,7 +368,7 @@ void DPCTLMemoryPool_ResetMemory(
         error_handler("Input PRef is nullptr.", __FILE__, __func__, __LINE__);
         return;
     }
-#if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
+#if defined(SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC)
     DPCTLPoolImpl *impl = unwrap_pool(PRef);
     try {
         // No dedicated "evict now" API in the spec; setting the
@@ -396,7 +389,7 @@ size_t DPCTLMemoryPool_GetUsedBytes(
         error_handler("Input PRef is nullptr.", __FILE__, __func__, __LINE__);
         return 0;
     }
-#if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
+#if defined(SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC)
     DPCTLPoolImpl *impl = unwrap_pool(PRef);
     try {
         return safe_used_size(*impl->pool);
@@ -417,7 +410,7 @@ size_t DPCTLMemoryPool_GetReservedBytes(
         error_handler("Input PRef is nullptr.", __FILE__, __func__, __LINE__);
         return 0;
     }
-#if DPCTL_HAS_SYCL_MEMORY_POOL_EXT
+#if defined(SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC)
     DPCTLPoolImpl *impl = unwrap_pool(PRef);
     try {
         return safe_reserved_size(*impl->pool);
