@@ -94,6 +94,41 @@ void OpaqueSmartPtr_Delete(void *opaque_ptr)
     delete sptr;
 }
 
+// Release the USM allocation managed by ``opaque_ptr`` in a way that is
+// ordered against work already submitted to the given queue. A host task
+// holding a copy of the managing ``shared_ptr`` is submitted to the queue;
+// the allocation is freed only when that host task runs. On an in-order
+// queue this happens after all previously submitted work (including kernels
+// enqueued by external libraries that share the queue) has completed, which
+// avoids releasing memory that is still in use. The original ``opaque_ptr``
+// is deleted before returning. Falls back to an eager delete if the host
+// task cannot be submitted.
+void OpaqueSmartPtr_AsyncDelete(void *opaque_ptr, DPCTLSyclQueueRef QRef)
+{
+    auto sptr = reinterpret_cast<std::shared_ptr<void> *>(opaque_ptr);
+    sycl::queue *q_ptr = dpctl::syclinterface::unwrap<sycl::queue>(QRef);
+
+    if (q_ptr) {
+        try {
+            // copy the shared_ptr, extending the allocation's lifetime until
+            // the host task below executes and the copy is destroyed
+            std::shared_ptr<void> shp_copy = *sptr;
+            q_ptr->submit([&](sycl::handler &cgh) {
+                cgh.host_task([shp = std::move(shp_copy)]() {
+                    // no body; ``shp`` is released here, after prior work on
+                    // the (in-order) queue has completed
+                });
+            });
+        } catch (const std::exception &e) {
+            std::cout << "Deferred USM release submission caught an exception: "
+                      << e.what() << std::endl;
+            // fall through: the eager delete below still releases the memory
+        }
+    }
+
+    delete sptr;
+}
+
 void *OpaqueSmartPtr_Copy(void *opaque_ptr)
 {
     auto sptr = reinterpret_cast<std::shared_ptr<void> *>(opaque_ptr);

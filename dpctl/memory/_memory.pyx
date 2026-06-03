@@ -81,6 +81,7 @@ cdef extern from "_opaque_smart_ptr.hpp":
     void * OpaqueSmartPtr_Make(void *, DPCTLSyclQueueRef) nogil
     void * OpaqueSmartPtr_Copy(void *) nogil
     void OpaqueSmartPtr_Delete(void *) nogil
+    void OpaqueSmartPtr_AsyncDelete(void *, DPCTLSyclQueueRef) nogil
     void * OpaqueSmartPtr_Get(void *) nogil
 
 
@@ -258,8 +259,24 @@ cdef class _Memory:
             )
 
     def __dealloc__(self):
+        cdef DPCTLSyclQueueRef QRef = NULL
         if not (self._opaque_ptr is NULL):
-            OpaqueSmartPtr_Delete(self._opaque_ptr)
+            # ``sycl::free`` does not wait for kernels that may still be using
+            # the allocation. On an in-order queue (possibly shared with an
+            # external library that enqueues kernels on it) an eager free can
+            # release memory that is still in use by pending work, leading to
+            # use-after-free crashes. Defer the release behind a host task
+            # ordered after all previously submitted work on the queue. The
+            # GIL is released because the deferred host task and other pending
+            # host tasks on the queue interact with the SYCL runtime, not the
+            # interpreter.
+            if self.queue is not None and self.queue.is_in_order:
+                QRef = self.queue.get_queue_ref()
+                with nogil:
+                    OpaqueSmartPtr_AsyncDelete(self._opaque_ptr, QRef)
+            else:
+                with nogil:
+                    OpaqueSmartPtr_Delete(self._opaque_ptr)
         self._cinit_empty()
 
     cdef DPCTLSyclUSMRef get_data_ptr(self):
