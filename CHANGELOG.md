@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 ### Change
+* Rewrote USM Python examples into a single example [gh-2292](https://github.com/IntelPython/dpctl/pull/2292)
 
 * Optimized `dpctl.utils.SequentialOrderManager` for in-order `dpctl.SyclQueue`: a no-op order manager is reused (cached on the queue) so no SYCL event book-keeping is performed when the queue already guarantees ordering. The immutable `SyclQueue.is_in_order` property is now cached to avoid a C-API call on every access. Requires rebuilding `dpctl` [gh-2299](https://github.com/IntelPython/dpctl/pull/2299)
 
