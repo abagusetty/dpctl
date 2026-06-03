@@ -10,7 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Change
 
+* Optimized `dpctl.utils.SequentialOrderManager` for in-order `dpctl.SyclQueue`: a no-op order manager is reused (cached on the queue) so no SYCL event book-keeping is performed when the queue already guarantees ordering. The immutable `SyclQueue.is_in_order` property is now cached to avoid a C-API call on every access. Requires rebuilding `dpctl` [gh-2299](https://github.com/IntelPython/dpctl/pull/2299)
+
 ### Fixed
+
+* `dpctl.utils.SequentialOrderManager.clear()` now waits on in-order queues during finalization [gh-2299](https://github.com/IntelPython/dpctl/pull/2299)
+* Fixed premature release of USM memory allocated on an in-order `dpctl.SyclQueue`, which could lead to use-after-free crashes when the queue is shared with external libraries that enqueue kernels on it. The deallocation is now deferred to a host task ordered after all previously submitted work on the in-order queue [gh-2299](https://github.com/IntelPython/dpctl/pull/2299)
 
 ## [0.22.1] - Apr. 24, 2026
 

@@ -1,11 +1,35 @@
 import weakref
 from collections import defaultdict
 from contextvars import ContextVar
-from typing import Union
+from typing import List, Protocol, runtime_checkable
 
 from .._sycl_event import SyclEvent
 from .._sycl_queue import SyclQueue
 from ._seq_order_keeper import _OrderManager
+
+
+@runtime_checkable
+class OrderManagerProtocol(Protocol):
+    """Interface implemented by order managers returned from
+    :class:`.SyclQueueToOrderManagerMap`."""
+
+    def add_event_pair(self, host_task_ev, comp_ev) -> None: ...
+
+    @property
+    def num_host_task_events(self) -> int: ...
+
+    @property
+    def num_submitted_events(self) -> int: ...
+
+    @property
+    def host_task_events(self) -> List[SyclEvent]: ...
+
+    @property
+    def submitted_events(self) -> List[SyclEvent]: ...
+
+    def wait(self) -> None: ...
+
+    def __copy__(self) -> "OrderManagerProtocol": ...
 
 
 class _SequentialOrderManager:
@@ -107,16 +131,25 @@ class SyclQueueToOrderManagerMap:
             "global_order_manager_map",
             default=defaultdict(_SequentialOrderManager),
         )
+        # No-op managers for in-order queues are cached on the queues
+        # themselves; we keep weak references here so that ``clear`` can
+        # still wait on the associated in-order queues at finalization.
+        self._in_order_managers = weakref.WeakSet()
 
-    def __getitem__(
-        self, q: SyclQueue
-    ) -> Union[_SequentialOrderManager, _NoOpOrderManager]:
+    def __getitem__(self, q: SyclQueue) -> OrderManagerProtocol:
         """Get order manager for given SyclQueue"""
         if not isinstance(q, SyclQueue):
             raise TypeError(f"Expected `dpctl.SyclQueue`, got {type(q)}")
         if q.is_in_order:
-            # we don't need to cache the NoOpOrderManager since it's stateless
-            return _NoOpOrderManager(q)
+            # The NoOpOrderManager is stateless, so a single instance can be
+            # reused for the lifetime of the queue. Cache it on the queue to
+            # avoid allocating one on every access.
+            mngr = q._no_op_order_manager
+            if mngr is None:
+                mngr = _NoOpOrderManager(q)
+                q._no_op_order_manager = mngr
+            self._in_order_managers.add(mngr)
+            return mngr
         _local = self._map.get()
         if q in _local:
             return _local[q]
@@ -131,6 +164,11 @@ class SyclQueueToOrderManagerMap:
         for v in _local.values():
             v.wait()
         _local.clear()
+        # Wait on in-order queues too; their no-op managers are not stored in
+        # ``_local`` but still need to be synchronized at finalization.
+        for m in tuple(self._in_order_managers):
+            m.wait()
+        self._in_order_managers.clear()
 
 
 SequentialOrderManager = SyclQueueToOrderManagerMap()

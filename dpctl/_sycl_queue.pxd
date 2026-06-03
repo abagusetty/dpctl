@@ -43,6 +43,11 @@ cdef public api class _SyclQueue [
     cdef DPCTLSyclQueueRef _queue_ref
     cdef SyclContext _context
     cdef SyclDevice _device
+    # Cached immutable in-order property; -1 means "not yet computed",
+    # 0/1 are the cached boolean values.
+    cdef int _cached_is_in_order
+    # Cached no-op order manager used when the queue is in-order.
+    cdef public object _no_op_order_manager
 
 
 cdef public api class SyclQueue (_SyclQueue) [

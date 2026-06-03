@@ -114,3 +114,32 @@ def test_no_op_order_manager():
     _mngr.wait()
     cpy = _mngr.__copy__()
     del cpy
+
+
+def test_no_op_order_manager_is_cached():
+    try:
+        q = dpctl.SyclQueue(property=("in_order",))
+    except dpctl.SyclQueueCreationError:
+        pytest.skip("Queue could not be created for default-selected device")
+    _som = dpctl.utils.SequentialOrderManager
+    # the no-op manager is cached on the queue and reused across accesses
+    assert _som[q] is _som[q]
+    # clear must wait on in-order queues without raising
+    _som.clear()
+
+
+def test_order_manager_dispatch():
+    try:
+        q_io = dpctl.SyclQueue(property=("in_order",))
+        q_ooo = dpctl.SyclQueue()
+    except dpctl.SyclQueueCreationError:
+        pytest.skip("Queue could not be created for default-selected device")
+    from dpctl.utils._order_manager import (
+        _NoOpOrderManager,
+        _SequentialOrderManager,
+    )
+
+    _som = dpctl.utils.SequentialOrderManager
+    assert isinstance(_som[q_io], _NoOpOrderManager)
+    assert isinstance(_som[q_ooo], _SequentialOrderManager)
+    _som.clear()

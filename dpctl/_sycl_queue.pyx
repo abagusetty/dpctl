@@ -534,6 +534,15 @@ cdef DPCTLSyclEventRef _memcpy_impl(
 cdef class _SyclQueue:
     """ Barebone data owner class used by SyclQueue.
     """
+    def __cinit__(self):
+        # Initialize the cache for the immutable in-order property. Cython
+        # runs the base class __cinit__ before the derived SyclQueue.__cinit__
+        # for all construction paths, so this is always set before _queue_ref
+        # is assigned or the property is read. A plain cdef int zero-initializes
+        # to 0, which is a valid cached value, hence the explicit -1 sentinel.
+        self._cached_is_in_order = -1
+        self._no_op_order_manager = None
+
     def __dealloc__(self):
         if (self._queue_ref):
             DPCTLQueue_Delete(self._queue_ref)
@@ -1487,7 +1496,14 @@ cdef class SyclQueue(_SyclQueue):
             Unless requested otherwise, :class:`.SyclQueue` is constructed
             to support out-of-order execution.
         """
-        return DPCTLQueue_IsInOrder(self._queue_ref)
+        # The in-order property is immutable for the lifetime of the queue,
+        # so the result is cached to avoid a C-API call on every access
+        # (this is queried on the order-manager hot path).
+        if self._cached_is_in_order == -1:
+            self._cached_is_in_order = (
+                1 if DPCTLQueue_IsInOrder(self._queue_ref) else 0
+            )
+        return bool(self._cached_is_in_order)
 
     @property
     def has_enable_profiling(self):
