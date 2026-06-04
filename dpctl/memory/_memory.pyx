@@ -265,12 +265,12 @@ cdef class _Memory:
             # the allocation. On an in-order queue (possibly shared with an
             # external library that enqueues kernels on it) an eager free can
             # release memory that is still in use by pending work, leading to
-            # use-after-free crashes. Defer the release behind a host task
-            # ordered after all previously submitted work on the queue. The
-            # GIL is released because the deferred host task and other pending
-            # host tasks on the queue interact with the SYCL runtime, not the
-            # interpreter.
-            if self.queue is not None and self.queue.is_in_order:
+            # use-after-free crashes. OpaqueSmartPtr_AsyncDelete defers the
+            # release behind a host task ordered after all previously submitted
+            # work for in-order queues, and releases eagerly otherwise. The GIL
+            # is released because it only interacts with the SYCL runtime, not
+            # the interpreter.
+            if self.queue is not None:
                 QRef = self.queue.get_queue_ref()
                 with nogil:
                     OpaqueSmartPtr_AsyncDelete(self._opaque_ptr, QRef)
