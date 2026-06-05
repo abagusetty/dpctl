@@ -273,16 +273,39 @@ work and no software pool is implemented in the meantime.
 
 ## E.1 Synchronization audit (current code, in-order lens)
 
-Reviewed and found correct — no over-synchronization to remove:
+Reviewed and found correct:
+- `copy_to_host` / `copy_from_host` / `copy_from_device` (same context) /
+  `memset` / `SyclQueue.memcpy`: eventless submit + `queue.wait()`. On an
+  in-order queue the op is serialized after prior work, so the queue wait
+  completes exactly this (last) submission — no per-op event, no extra waiting.
 - `copy_via_host` (`_memory.pyx`): cross-context; threads `E1`→`E2` dependency
   and waits on the final event. The host staging buffer outlives the copy
-  because the function blocks on `E2` before returning. Correct.
-- `copy_to_host` / `copy_from_host` / `copy_from_device` (same context) /
-  `memset`: direct submit + wait on **that op's** event. On an in-order queue
-  the op is serialized after prior work, so waiting on it also implies prior
-  work has completed — precise, not a full-queue drain.
+  because the function blocks on `E2` before returning. Correct (cross-context,
+  not queue-order, so it legitimately keeps events).
 - `_NoOpOrderManager.wait()` and `SyclQueue.wait()`: full-queue drain, which is
   the intended "wait for everything" semantics.
+
+### host_task / depends_on audit (in-order)
+
+`host_task` usages — all appropriate (each is for lifetime management; the
+host task is the correct mechanism and none are removable):
+- `OpaqueSmartPtr_AsyncDelete` deferred USM free: host task with **no**
+  `depends_on`; relies purely on in-order serialization. Minimal and correct.
+- `async_dec_ref` (`_host_task_util.hpp`): single host task that `Py_DECREF`s
+  the args; applies `depends_on` only when the caller passes events (empty
+  under the no-op order manager), so no redundant edge. The host task reacquires
+  the GIL; the deferred-free host task does not (it touches no Python). Correct.
+- `keep_args_alive` / `keep_args_alive_in_order` (`dpctl4pybind11.hpp`):
+  host tasks holding USM `shared_ptr`s / Python handles.
+
+`depends_on` usages — caller-provided dependencies that may be cross-queue are
+retained (correct): `memcpy_async` / `DPCTLQueue_MemcpyWithEvents`,
+`submit_barrier`, kernel `submit`, `async_dec_ref`, `enqueue_native_command`,
+`_submit_empty_task`. The one **redundant** edge — `keep_args_alive` chaining
+the second host task onto the first via `depends_on(host_task_ev)` — was removed:
+on an in-order queue the second host task is already serialized after the first
+(which carries `depends`), so only the first submission needs the explicit
+dependency.
 
 ## E.2 Resolved TODOs
 

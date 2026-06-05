@@ -791,6 +791,11 @@ sycl::event keep_args_alive(sycl::queue &q,
         }
     }
 
+    // dpctl queues are in-order, so the host tasks submitted here are
+    // serialized after one another. Only the first submitted host task needs
+    // the explicit ``depends`` (which may contain cross-queue events); any
+    // subsequent host task is ordered after it by the in-order queue and so
+    // transitively after ``depends`` -- no chaining dependency is required.
     bool use_depends = true;
     sycl::event host_task_ev;
 
@@ -799,9 +804,6 @@ sycl::event keep_args_alive(sycl::queue &q,
             if (use_depends) {
                 cgh.depends_on(depends);
                 use_depends = false;
-            }
-            else {
-                cgh.depends_on(host_task_ev);
             }
             cgh.host_task([shp_usm = std::move(shp_usm)]() {
                 // no body, but shared pointers are captured in
@@ -816,9 +818,6 @@ sycl::event keep_args_alive(sycl::queue &q,
             if (use_depends) {
                 cgh.depends_on(depends);
                 use_depends = false;
-            }
-            else {
-                cgh.depends_on(host_task_ev);
             }
             cgh.host_task([n_objects_held, shp_arr = std::move(shp_arr)]() {
                 py::gil_scoped_acquire acquire;
