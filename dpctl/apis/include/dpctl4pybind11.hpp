@@ -36,6 +36,11 @@
 #include <utility>
 #include <vector>
 
+#if defined(SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS)
+// eventless submit used by keep_args_alive_in_order / enqueue_native_command
+#include <sycl/ext/oneapi/experimental/enqueue_functions.hpp>
+#endif
+
 namespace py = pybind11;
 
 namespace dpctl
@@ -846,10 +851,12 @@ sycl::event keep_args_alive(sycl::queue &q,
     allocated on ``q``. For out-of-order queues, or USM allocated on a different
     queue, use keep_args_alive() instead. No explicit event dependency is
     threaded: the in-order queue serializes the decref host task after prior
-    submissions. */
+    submissions.
+
+    The decref host task is submitted eventlessly (no ``sycl::event`` is
+    created or returned); use ``q.wait()`` if completion must be observed. */
 template <std::size_t num>
-sycl::event keep_args_alive_in_order(sycl::queue &q,
-                                     const py::object (&py_objs)[num])
+void keep_args_alive_in_order(sycl::queue &q, const py::object (&py_objs)[num])
 {
     std::size_t n_objects_held = 0;
     std::array<std::shared_ptr<py::handle>, num> shp_arr{};
@@ -865,9 +872,8 @@ sycl::event keep_args_alive_in_order(sycl::queue &q,
         }
     }
 
-    sycl::event host_task_ev;
     if (n_objects_held > 0) {
-        host_task_ev = q.submit([&](sycl::handler &cgh) {
+        auto cgf = [&](sycl::handler &cgh) {
             cgh.host_task([n_objects_held, shp_arr = std::move(shp_arr)]() {
                 py::gil_scoped_acquire acquire;
 
@@ -875,10 +881,13 @@ sycl::event keep_args_alive_in_order(sycl::queue &q,
                     shp_arr[i]->dec_ref();
                 }
             });
-        });
+        };
+#if defined(SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS)
+        sycl::ext::oneapi::experimental::submit(q, cgf);
+#else
+        q.submit(cgf);
+#endif
     }
-
-    return host_task_ev;
 }
 
 /*! @brief Check if all allocation queues are the same as the

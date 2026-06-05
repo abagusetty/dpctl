@@ -380,3 +380,62 @@ lock. dpctl intentionally does **not** add an internal lock around these: it
 could not make cross-thread submission *ordering* meaningful, and it would
 penalize the common single-owner (one queue per worker/stream) pattern. This
 contract is documented on `set_external_event` / `get_last_event`.
+
+---
+
+# Part G — The same-queue assumption (cross-queue dependencies)
+
+**Question:** is it safe to assume dpnp/dpctl never produce cross-queue
+dependencies, and optimize for that?
+
+**Answer:** split it by operation kind — the assumption holds for *compute*,
+not for explicit *data movement*.
+
+## G.1 Where the assumption holds (compute path)
+
+dpnp / dpctl.tensor resolve a single **execution queue** for every operation
+(`dpctl.utils.get_execution_queue`, now in dpnp) and raise
+`ExecutionPlacementError` if operands disagree; temporaries are allocated on
+that same queue. CuPy is analogous (work runs on the current stream). So a chain
+of elementwise / reduction / linalg ops on one queue has **no cross-queue
+dependencies** — submission order on the in-order queue is the only ordering
+needed. This is the hot path, and it is already fully optimized:
+
+- the no-op order manager makes dpnp pass **empty** dependency lists, so dpctl's
+  dependency-handling code is a no-op on this path;
+- `memcpy`/`memset`/`prefetch` and the deferred USM free are eventless;
+- kernels can be launched eventlessly (`submit_async(eventless=True)`),
+  USM lifetime via `keep_args_alive_in_order` (eventless, USM args skipped).
+
+The win is obtained **without** assuming "no cross-queue ever": dpctl honors
+dependencies only when explicitly given, and on this path nothing gives any.
+
+## G.2 Where it does NOT hold (data-movement / boundary path)
+
+These dpnp/dpctl operations genuinely cross queues or contexts and **must** keep
+their event dependencies — they are isolated, synchronizing, and never on the
+eventless hot path:
+
+- **cross-context / cross-device copies** — `copy_via_host` (`E1`→`E2` event),
+  peer-to-peer, multi-GPU;
+- **interchange** — DLPack import, `__sycl_usm_array_interface__`,
+  `dpnp.asarray(x, sycl_queue=other)` migration;
+- **native / library interop** — `enqueue_native_command`, oneMKL on another
+  queue;
+- **user multi-stream programs** — explicit overlap / pipelining across several
+  in-order queues, coordinated with `dEvents` / `set_external_event` /
+  `get_last_event`.
+
+## G.3 Practical rule
+
+Do **not** bake "no cross-queue" into dpctl globally — dpctl is the layer that
+*implements* the boundary crossings above, and its public APIs
+(`memcpy_async`/`submit_async` `dEvents`, `keep_args_alive`,
+`set_external_event`) are the substrate user multi-stream code relies on.
+
+Instead, the assumption lives at the **caller (dpnp/app) layer**, expressed by
+*opting into* the eventless, same-queue-assuming entry points:
+`submit_async(eventless=True)`, the eventless `memcpy`/`memset`/`prefetch`,
+`keep_args_alive_in_order`, and relying on the no-op order manager (empty deps).
+dpctl stays correct for the boundary cases; dpnp gets zero per-op event overhead
+on the compute path. The two coexist with no unsafe global assumption.
