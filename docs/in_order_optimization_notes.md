@@ -9,6 +9,20 @@ without a SYCL build available, so every item is gated behind a feature-test
 macro with a fallback to today's behavior. Validate each with `SYCL_EXT_*`
 guards on the Aurora toolchain before relying on it.
 
+## Implementation status
+
+| Item | Status | Where |
+| --- | --- | --- |
+| A. Same-queue in-order keep-alive elision | Implemented (enabler) | `dpctl::utils::keep_args_alive_in_order` in `dpctl4pybind11.hpp`; caller opt-in |
+| B1. Eventless deferred USM free | Implemented | `OpaqueSmartPtr_AsyncDelete` in `dpctl/memory/_opaque_smart_ptr.hpp` |
+| B1. Eventless synchronous memcpy/memset | **Future work** | needs new C-API + wait-semantics review |
+| B2. `get_last_event` / `set_external_event` | Implemented | C-API + `SyclQueue` methods |
+| B3. Native-command interop | Implemented | `dpctl::utils::enqueue_native_command` in `dpctl4pybind11.hpp` |
+| B4. Stream-ordered async USM allocation | **Future work** | extension is *proposed* (not usable in current DPC++) |
+
+All implemented items are macro-gated and fall back to current behavior; they
+have **not** been compiled or run — validate on Aurora.
+
 ---
 
 ## Part A — Immediate, testable: drop per-op keep-alive for same-queue in-order USM args

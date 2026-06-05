@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [dev] - XXX. XX, XXXX
 
 ### Added
+* In-order queue performance/interop primitives built on SYCL extensions, each feature-test-macro gated with a fallback to current behavior: eventless deferred USM free (`sycl_ext_oneapi_enqueue_functions`); `dpctl::utils::keep_args_alive_in_order` which skips redundant keep-alive for same-queue in-order USM args; `dpctl::utils::enqueue_native_command` to order native backend kernels inside an in-order queue (`sycl_ext_codeplay_enqueue_native_command`); and `SyclQueue.get_last_event()` / `SyclQueue.set_external_event()` (`sycl_ext_oneapi_in_order_queue_events`). See `docs/in_order_optimization_notes.md`. Requires rebuilding `dpctl`.
 
 ### Change
 * Rewrote USM Python examples into a single example [gh-2292](https://github.com/IntelPython/dpctl/pull/2292)
