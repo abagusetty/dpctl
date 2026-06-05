@@ -288,15 +288,17 @@ Reviewed and found correct — no over-synchronization to remove:
 
 - **B1 eventless synchronous memcpy/memset — implemented.** Added
   `DPCTLQueue_MemcpyEventless` / `DPCTLQueue_MemsetEventless` (eventless
-  `enqueue_functions` submit, fallback discards the event). On **in-order**
-  queues the synchronous paths (`SyclQueue.memcpy`, `_Memory.copy_to_host` /
-  `copy_from_host` / `copy_from_device` (same context) / `memset`) now submit
-  without creating a per-op `sycl::event` and synchronize with a single
-  `queue.wait()` — the SYCL analog of CuPy's `cudaMemcpyAsync` +
-  `stream.synchronize()`. **Out-of-order** queues keep the precise per-event
-  wait (no behavior change on the escape-hatch path). `mem_advise` and the
-  cross-context `copy_via_host` keep events (no eventless equivalent / need the
-  dependency edge).
+  `enqueue_functions` submit, fallback discards the event). The synchronous
+  paths (`SyclQueue.memcpy`, `_Memory.copy_to_host` / `copy_from_host` /
+  `copy_from_device` (same context) / `memset`) now submit without creating a
+  per-op `sycl::event` and synchronize with a single `queue.wait()` — the SYCL
+  analog of CuPy's `cudaMemcpyAsync` + `stream.synchronize()`. Since dpctl
+  queues are always in-order, there is no out-of-order fallback. `mem_advise`
+  and the cross-context `copy_via_host` keep events (no eventless equivalent /
+  need the dependency edge).
+- **Out-of-order queue support — removed.** dpctl queues are always in-order;
+  the raw-int escape hatch, the `_SequentialOrderManager` and the C++
+  sequential order keeper are removed, and all out-of-order branches are gone.
 - **Memory pool (was B4) — not pursued.** See Part E above (known limitation).
 
 ---
