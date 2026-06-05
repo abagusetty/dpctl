@@ -541,6 +541,7 @@ cdef class _SyclQueue:
         # is assigned or the property is read. A plain cdef int zero-initializes
         # to 0, which is a valid cached value, hence the explicit -1 sentinel.
         self._cached_is_in_order = -1
+        self._cached_has_enable_profiling = -1
         self._no_op_order_manager = None
 
     def __dealloc__(self):
@@ -1540,7 +1541,13 @@ cdef class SyclQueue(_SyclQueue):
             Collection of profiling information is not enabled
             by default.
         """
-        return DPCTLQueue_HasEnableProfiling(self._queue_ref)
+        # The enable-profiling property is immutable for the lifetime of the
+        # queue, so the result is cached to avoid repeated C-API calls.
+        if self._cached_has_enable_profiling == -1:
+            self._cached_has_enable_profiling = (
+                1 if DPCTLQueue_HasEnableProfiling(self._queue_ref) else 0
+            )
+        return bool(self._cached_has_enable_profiling)
 
     @property
     def __name__(self):

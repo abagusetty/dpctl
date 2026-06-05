@@ -132,6 +132,21 @@ def test_is_in_order_is_cached():
     assert q_in_order.is_in_order is True
 
 
+def test_has_enable_profiling_is_cached():
+    """The ``has_enable_profiling`` property is cached and must return stable
+    values across repeated accesses."""
+    try:
+        q_default = dpctl.SyclQueue()
+        q_profiling = dpctl.SyclQueue(property="enable_profiling")
+    except dpctl.SyclQueueCreationError:
+        pytest.skip("Queue could not be created for default-selected device")
+
+    assert q_default.has_enable_profiling is False
+    assert q_default.has_enable_profiling is False
+    assert q_profiling.has_enable_profiling is True
+    assert q_profiling.has_enable_profiling is True
+
+
 def test_hashing_of_queue():
     """
     Test that a :class:`dpctl.SyclQueue` object can be used as
