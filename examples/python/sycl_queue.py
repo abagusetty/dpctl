@@ -20,7 +20,7 @@ import dpctl
 def create_default_queue():
     """Create a queue from default selector."""
     q = dpctl.SyclQueue()
-    # Queue is out-of-order by default
+    # Queue is in-order by default (out-of-order via property=0)
     print(f"Queue {q} is in order: {q.is_in_order}")
 
 

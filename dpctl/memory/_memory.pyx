@@ -55,6 +55,7 @@ from dpctl._backend cimport (  # noqa: E211
     DPCTLSyclUSMRef,
     DPCTLUSM_GetPointerDevice,
     DPCTLUSM_GetPointerType,
+    _queue_property_type,
     _usm_type,
 )
 

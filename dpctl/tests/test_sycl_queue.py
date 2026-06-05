@@ -49,10 +49,14 @@ def test_valid_filter_selectors(valid_filter, check):
     try:
         q = dpctl.SyclQueue(valid_filter)
         device = q.get_sycl_device()
-        assert q.is_in_order is False
+        # queues are in-order by default
+        assert q.is_in_order is True
         q2 = dpctl.SyclQueue(valid_filter, property="in_order")
         # assert device == q2.get_sycl_device()
         assert q2.is_in_order is True
+        # out-of-order is reachable only via the raw-int escape hatch
+        q3 = dpctl.SyclQueue(valid_filter, property=0)
+        assert q3.is_in_order is False
     except dpctl.SyclQueueCreationError:
         pytest.skip("Failed to create device with supported filter")
     check(device)
@@ -121,15 +125,26 @@ def test_is_in_order_is_cached():
     """The ``is_in_order`` property is cached and must return stable values
     across repeated accesses."""
     try:
-        q_default = dpctl.SyclQueue()
+        # out-of-order via the raw-int escape hatch (queues are in-order by
+        # default), so both cached True and cached False paths are exercised
+        q_out_of_order = dpctl.SyclQueue(property=0)
         q_in_order = dpctl.SyclQueue(property="in_order")
     except dpctl.SyclQueueCreationError:
         pytest.skip("Queue could not be created for default-selected device")
 
-    assert q_default.is_in_order is False
-    assert q_default.is_in_order is False
+    assert q_out_of_order.is_in_order is False
+    assert q_out_of_order.is_in_order is False
     assert q_in_order.is_in_order is True
     assert q_in_order.is_in_order is True
+
+
+def test_in_order_is_default():
+    """A bare ``SyclQueue()`` is in-order by default in this fork."""
+    try:
+        q = dpctl.SyclQueue()
+    except dpctl.SyclQueueCreationError:
+        pytest.skip("Queue could not be created for default-selected device")
+    assert q.is_in_order is True
 
 
 def test_has_enable_profiling_is_cached():

@@ -42,7 +42,10 @@ cdef DPCTLSyclQueueRef _queue_ref_copy_from_USMRef_and_SyclContext(
     cdef SyclDevice dev = _Memory.get_pointer_device(ptr, ctx)
     cdef DPCTLSyclContextRef CRef = ctx.get_context_ref()
     cdef DPCTLSyclDeviceRef DRef = dev.get_device_ref()
-    return DPCTLQueue_Create(CRef, DRef, NULL, 0)
+    # in-order by default, consistent with SyclQueue construction
+    return DPCTLQueue_Create(
+        CRef, DRef, NULL, _queue_property_type._IN_ORDER
+    )
 
 
 cdef DPCTLSyclQueueRef get_queue_ref_from_ptr_and_syclobj(

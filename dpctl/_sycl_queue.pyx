@@ -413,6 +413,11 @@ cdef class SyclQueueCreationError(Exception):
 cdef int _parse_queue_properties(object prop) except *:
     cdef int res = 0
     cdef object props
+    # Raw-int escape hatch: an integer property bitmask is honored literally.
+    # This is the only way to obtain an out-of-order queue, since this fork
+    # makes queues in-order by default (see below). For example, ``property=0``
+    # (DPCTL_DEFAULT_PROPERTY) yields an out-of-order queue and ``property=1``
+    # (DPCTL_ENABLE_PROFILING) an out-of-order profiling queue.
     if isinstance(prop, int):
         return <int>prop
     if not isinstance(prop, (tuple, list)):
@@ -438,6 +443,10 @@ cdef int _parse_queue_properties(object prop) except *:
             raise ValueError(
                 f"queue property '{prop}' is not understood."
             )
+    # In-order by default: every queue requested through the string/tuple API
+    # is constructed in-order. Out-of-order is only reachable via the raw-int
+    # escape hatch above.
+    res = res | _queue_property_type._IN_ORDER
     return res
 
 
@@ -635,9 +644,13 @@ cdef class SyclQueue(_SyclQueue):
              `ctxt` is not specified, :class:`dpctl.SyclQueue` instance is
              created from foreign `sycl::queue` object referenced by the
              capsule.
-        property (str, tuple(str), list(str), optional): Defaults to None.
-                The argument can be either "default", "in_order",
-                "enable_profiling", or a tuple containing these.
+        property (str, tuple(str), list(str), int, optional): Defaults to
+                "default". The argument can be either "default", "in_order",
+                "enable_profiling", or a tuple containing these. Queues are
+                constructed **in-order by default**; an out-of-order queue can
+                only be requested through the raw-integer escape hatch,
+                ``property=0`` (or ``property=1`` for an out-of-order queue
+                with profiling enabled).
 
     Raises:
         SyclQueueCreationError: If the :class:`dpctl.SyclQueue` object
@@ -656,8 +669,11 @@ cdef class SyclQueue(_SyclQueue):
                 "SyclQueue constructor takes 0, 1, or 2 positinal arguments, "
                 f"but {len(args)} were given."
             )
+        # Absent property defaults to "default" (a string) rather than the
+        # integer _DEFAULT_PROPERTY, so it flows through the in-order-adding
+        # path of _parse_queue_properties instead of the raw-int escape hatch.
         props = _parse_queue_properties(
-            kwargs.pop("property", _queue_property_type._DEFAULT_PROPERTY)
+            kwargs.pop("property", "default")
         )
         if (kwargs):
             raise TypeError(
@@ -918,12 +934,15 @@ cdef class SyclQueue(_SyclQueue):
 
     @staticmethod
     cdef SyclQueue _create_from_context_and_device(
-        SyclContext ctx, SyclDevice dev, int props=0
+        SyclContext ctx,
+        SyclDevice dev,
+        int props=_queue_property_type._IN_ORDER
     ):
         """
         Static factory method to create :class:`dpctl.SyclQueue` instance
         from given :class:`dpctl.SyclContext`, :class:`dpctl.SyclDevice`
-        and optional integer ``props`` encoding the queue properties.
+        and optional integer ``props`` encoding the queue properties. The
+        default is an in-order queue; pass ``props=0`` for out-of-order.
         """
         cdef _SyclQueue ret = _SyclQueue.__new__(_SyclQueue)
         cdef DPCTLSyclContextRef cref = ctx.get_context_ref()
@@ -1483,19 +1502,20 @@ cdef class SyclQueue(_SyclQueue):
                 >>> import dpctl
                 >>> q = dpctl.SyclQueue("cpu")
                 >>> q.is_in_order
-                False
-                >>> q = dpctl.SyclQueue("cpu", property="in_order")
-                >>> q.is_in_order
                 True
+                >>> q = dpctl.SyclQueue("cpu", property=0)
+                >>> q.is_in_order
+                False
 
         Returns:
             bool:
-                Indicates whether this :class:`.SyclQueue` was created
-                with ``property="in_order"``.
+                Indicates whether this :class:`.SyclQueue` is in-order.
 
         .. note::
             Unless requested otherwise, :class:`.SyclQueue` is constructed
-            to support out-of-order execution.
+            to be in-order. An out-of-order queue can be requested through
+            the raw-integer escape hatch ``property=0`` (or ``property=1``
+            for an out-of-order queue with profiling enabled).
         """
         # The in-order property is immutable for the lifetime of the queue,
         # so the result is cached to avoid a C-API call on every access

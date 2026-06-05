@@ -68,7 +68,9 @@ def test_intel_device_info_validation():
 
 def test_order_manager():
     try:
-        q = dpctl.SyclQueue()
+        # queues are in-order by default; use the raw-int escape hatch to get
+        # an out-of-order queue, which dispatches to _SequentialOrderManager
+        q = dpctl.SyclQueue(property=0)
     except dpctl.SyclQueueCreationError:
         pytest.skip("Queue could not be created for default-selected device")
     _som = dpctl.utils.SequentialOrderManager
@@ -131,7 +133,10 @@ def test_no_op_order_manager_is_cached():
 def test_order_manager_dispatch():
     try:
         q_io = dpctl.SyclQueue(property=("in_order",))
-        q_ooo = dpctl.SyclQueue()
+        # in-order by default -> no-op manager
+        q_default = dpctl.SyclQueue()
+        # out-of-order via raw-int escape hatch -> sequential manager
+        q_ooo = dpctl.SyclQueue(property=0)
     except dpctl.SyclQueueCreationError:
         pytest.skip("Queue could not be created for default-selected device")
     from dpctl.utils._order_manager import (
@@ -141,5 +146,6 @@ def test_order_manager_dispatch():
 
     _som = dpctl.utils.SequentialOrderManager
     assert isinstance(_som[q_io], _NoOpOrderManager)
+    assert isinstance(_som[q_default], _NoOpOrderManager)
     assert isinstance(_som[q_ooo], _SequentialOrderManager)
     _som.clear()

@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 * Optimized `dpctl.utils.SequentialOrderManager` for in-order `dpctl.SyclQueue`: a no-op order manager is reused (cached on the queue) so no SYCL event book-keeping is performed when the queue already guarantees ordering. The immutable `SyclQueue.is_in_order` property is now cached to avoid a C-API call on every access. Requires rebuilding `dpctl` [gh-2299](https://github.com/IntelPython/dpctl/pull/2299)
 
+* **Backward-incompatible (fork-local):** `dpctl.SyclQueue` is now constructed **in-order by default**. Every queue requested through the string/tuple `property` API (including `property="enable_profiling"`) is in-order; an out-of-order queue is reachable only through the raw-integer escape hatch `property=0` (or `property=1` for an out-of-order queue with profiling enabled). This makes the no-op order manager and the in-order USM deferred-free the default path. Requires rebuilding `dpctl`.
+
 ### Fixed
 
 * `dpctl.utils.SequentialOrderManager.clear()` now waits on in-order queues during finalization [gh-2299](https://github.com/IntelPython/dpctl/pull/2299)

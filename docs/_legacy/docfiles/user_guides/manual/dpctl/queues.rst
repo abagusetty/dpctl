@@ -30,12 +30,18 @@ tasks. A SYCL queue stores the needed data to manage the scheduling operations.
 
 There are two types of queues:
 
-* **Out-of-order.** Unless specified otherwise during the constriction of a queue, a SYCL runtime
-  executes tasks, which dependencies are met in an unspecified order, with the
-  possibility for some of the tasks to be executed concurrently.
+* **Out-of-order.** A SYCL runtime executes tasks, whose dependencies are met,
+  in an unspecified order, with the possibility for some of the tasks to be
+  executed concurrently.
 * **In-order.** You can specify SYCL queues to indicate that runtime must execute tasks in the
   order, in which they are submitted. In this case, tasks submitted to such a
   queue are never executed concurrently.
+
+.. note::
+   In this build of ``dpctl``, queues are constructed **in-order by default**.
+   An out-of-order queue can be requested through the raw-integer escape hatch
+   ``property=0`` (or ``property=1`` for an out-of-order queue with profiling
+   enabled).
 
 
 Creating a New Queue
