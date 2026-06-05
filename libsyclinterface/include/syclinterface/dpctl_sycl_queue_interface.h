@@ -395,6 +395,37 @@ DPCTL_API
 size_t DPCTLQueue_Hash(__dpctl_keep const DPCTLSyclQueueRef QRef);
 
 /*!
+ * @brief C-API wrapper for sycl::queue::ext_oneapi_get_last_event (extension
+ * sycl_ext_oneapi_in_order_queue_events).
+ *
+ * Returns an opaque pointer to the event of the last command submitted to the
+ * in-order queue, or NULL if no command has been submitted yet (or if the
+ * extension is not available). The queue must be in-order.
+ *
+ * @param    QRef         An opaque pointer to the ``sycl::queue``.
+ * @return   An opaque pointer to the last ``sycl::event``, or NULL.
+ * @ingroup QueueInterface
+ */
+DPCTL_API
+__dpctl_give DPCTLSyclEventRef
+DPCTLQueue_GetLastEvent(__dpctl_keep const DPCTLSyclQueueRef QRef);
+
+/*!
+ * @brief C-API wrapper for sycl::queue::ext_oneapi_set_external_event
+ * (extension sycl_ext_oneapi_in_order_queue_events).
+ *
+ * Sets an event to be used as an additional dependency of the next command
+ * submitted to the in-order queue. The queue must be in-order.
+ *
+ * @param    QRef         An opaque pointer to the ``sycl::queue``.
+ * @param    ERef         An opaque pointer to the external ``sycl::event``.
+ * @ingroup QueueInterface
+ */
+DPCTL_API
+void DPCTLQueue_SetExternalEvent(__dpctl_keep const DPCTLSyclQueueRef QRef,
+                                 __dpctl_keep const DPCTLSyclEventRef ERef);
+
+/*!
  * @brief C-API wrapper for ``sycl::queue::submit_barrier()``.
  *
  * @param    QRef    An opaque pointer to the ``sycl::queue``.

@@ -37,6 +37,7 @@
 
 #include <cstdint>
 #include <exception>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <sycl/sycl.hpp> /* SYCL headers   */
@@ -778,6 +779,60 @@ size_t DPCTLQueue_Hash(__dpctl_keep const DPCTLSyclQueueRef QRef)
         error_handler("Argument QRef is NULL.", __FILE__, __func__, __LINE__);
         return 0;
     }
+}
+
+__dpctl_give DPCTLSyclEventRef
+DPCTLQueue_GetLastEvent(__dpctl_keep const DPCTLSyclQueueRef QRef)
+{
+    auto Q = unwrap<queue>(QRef);
+    if (!Q) {
+        error_handler("Argument QRef is NULL", __FILE__, __func__, __LINE__);
+        return nullptr;
+    }
+#if defined(SYCL_EXT_ONEAPI_IN_ORDER_QUEUE_EVENTS)
+    try {
+        std::optional<event> last = Q->ext_oneapi_get_last_event();
+        if (last.has_value()) {
+            return wrap<event>(new event(std::move(last.value())));
+        }
+        // No commands have been submitted to the queue yet.
+        return nullptr;
+    } catch (std::exception const &e) {
+        error_handler(e, __FILE__, __func__, __LINE__);
+        return nullptr;
+    }
+#else
+    error_handler("DPCTLQueue_GetLastEvent requires "
+                  "sycl_ext_oneapi_in_order_queue_events",
+                  __FILE__, __func__, __LINE__);
+    return nullptr;
+#endif
+}
+
+void DPCTLQueue_SetExternalEvent(__dpctl_keep const DPCTLSyclQueueRef QRef,
+                                 __dpctl_keep const DPCTLSyclEventRef ERef)
+{
+    auto Q = unwrap<queue>(QRef);
+    auto E = unwrap<event>(ERef);
+    if (!Q) {
+        error_handler("Argument QRef is NULL", __FILE__, __func__, __LINE__);
+        return;
+    }
+    if (!E) {
+        error_handler("Argument ERef is NULL", __FILE__, __func__, __LINE__);
+        return;
+    }
+#if defined(SYCL_EXT_ONEAPI_IN_ORDER_QUEUE_EVENTS)
+    try {
+        Q->ext_oneapi_set_external_event(*E);
+    } catch (std::exception const &e) {
+        error_handler(e, __FILE__, __func__, __LINE__);
+    }
+#else
+    error_handler("DPCTLQueue_SetExternalEvent requires "
+                  "sycl_ext_oneapi_in_order_queue_events",
+                  __FILE__, __func__, __LINE__);
+#endif
 }
 
 __dpctl_give DPCTLSyclEventRef DPCTLQueue_SubmitBarrierForEvents(

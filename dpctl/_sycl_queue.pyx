@@ -40,6 +40,7 @@ from ._backend cimport (  # noqa: E211
     DPCTLQueue_GetBackend,
     DPCTLQueue_GetContext,
     DPCTLQueue_GetDevice,
+    DPCTLQueue_GetLastEvent,
     DPCTLQueue_HasEnableProfiling,
     DPCTLQueue_Hash,
     DPCTLQueue_IsInOrder,
@@ -47,6 +48,7 @@ from ._backend cimport (  # noqa: E211
     DPCTLQueue_Memcpy,
     DPCTLQueue_MemcpyWithEvents,
     DPCTLQueue_Prefetch,
+    DPCTLQueue_SetExternalEvent,
     DPCTLQueue_SubmitBarrierForEvents,
     DPCTLQueue_SubmitNDRange,
     DPCTLQueue_SubmitRange,
@@ -1655,6 +1657,62 @@ cdef class SyclQueue(_SyclQueue):
             )
 
         return SyclEvent._create(ERef)
+
+    def get_last_event(self):
+        """ get_last_event()
+
+        Returns the event of the last command submitted to this in-order
+        queue, or ``None`` if no command has been submitted yet.
+
+        This wraps ``sycl::queue::ext_oneapi_get_last_event`` (extension
+        ``sycl_ext_oneapi_in_order_queue_events``) and provides a cheap way to
+        hand off the implicit ordering of an in-order queue to another queue
+        without maintaining an event list.
+
+        Returns:
+            dpctl.SyclEvent or None:
+                The last submitted event, or ``None`` if the queue is empty.
+
+        Raises:
+            ValueError: If the queue is not in-order, or the underlying SYCL
+                runtime does not support the extension.
+        """
+        cdef DPCTLSyclEventRef ERef = NULL
+        if not self.is_in_order:
+            raise ValueError(
+                "get_last_event is only supported on in-order queues"
+            )
+        ERef = DPCTLQueue_GetLastEvent(self._queue_ref)
+        if ERef is NULL:
+            # no commands submitted yet (or extension unavailable)
+            return None
+        return SyclEvent._create(ERef)
+
+    def set_external_event(self, SyclEvent event):
+        """ set_external_event(event)
+
+        Sets ``event`` as an additional dependency of the next command
+        submitted to this in-order queue. A subsequent call overwrites the
+        previously set event.
+
+        This wraps ``sycl::queue::ext_oneapi_set_external_event`` (extension
+        ``sycl_ext_oneapi_in_order_queue_events``). It injects a cross-queue
+        dependency into the in-order stream without threading explicit
+        dependent-event lists through every submission.
+
+        Args:
+            event (dpctl.SyclEvent):
+                The external event the next submission must wait on.
+
+        Raises:
+            ValueError: If the queue is not in-order, or the underlying SYCL
+                runtime does not support the extension.
+        """
+        if not self.is_in_order:
+            raise ValueError(
+                "set_external_event is only supported on in-order queues"
+            )
+        DPCTLQueue_SetExternalEvent(self._queue_ref, event.get_event_ref())
 
     @property
     def name(self):

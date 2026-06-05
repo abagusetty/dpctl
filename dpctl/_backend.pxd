@@ -533,6 +533,11 @@ cdef extern from "syclinterface/dpctl_sycl_queue_interface.h":
         const DPCTLSyclEventRef *DepEvents,
         size_t NDepEvents)
     cdef bool DPCTLQueue_HasEnableProfiling(const DPCTLSyclQueueRef QRef)
+    cdef DPCTLSyclEventRef DPCTLQueue_GetLastEvent(
+        const DPCTLSyclQueueRef QRef)
+    cdef void DPCTLQueue_SetExternalEvent(
+        const DPCTLSyclQueueRef QRef,
+        const DPCTLSyclEventRef ERef)
 
 
 cdef extern from "syclinterface/dpctl_sycl_usm_interface.h":
