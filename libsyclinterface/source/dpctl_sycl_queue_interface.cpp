@@ -625,6 +625,125 @@ DPCTLQueue_SubmitNDRange(__dpctl_keep const DPCTLSyclKernelRef KRef,
     }
 }
 
+namespace
+{
+// Submit a command-group eventlessly via sycl_ext_oneapi_enqueue_functions when
+// available, otherwise via queue::submit with the returned event discarded.
+template <typename CGF> inline void submit_discard(queue &q, CGF &&cgf)
+{
+#if defined(SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS)
+    sycl::ext::oneapi::experimental::submit(q, std::forward<CGF>(cgf));
+#else
+    q.submit(std::forward<CGF>(cgf));
+#endif
+}
+} // namespace
+
+void DPCTLQueue_SubmitRangeEventless(
+    __dpctl_keep const DPCTLSyclKernelRef KRef,
+    __dpctl_keep const DPCTLSyclQueueRef QRef,
+    __dpctl_keep void **Args,
+    __dpctl_keep const DPCTLKernelArgType *ArgTypes,
+    size_t NArgs,
+    __dpctl_keep const size_t Range[3],
+    size_t NDims,
+    __dpctl_keep const DPCTLSyclEventRef *DepEvents,
+    size_t NDepEvents)
+{
+    auto Kernel = unwrap<kernel>(KRef);
+    auto Queue = unwrap<queue>(QRef);
+    try {
+        switch (NDims) {
+        case 1:
+            submit_discard(*Queue, [&](handler &cgh) {
+                set_dependent_events(cgh, DepEvents, NDepEvents);
+                set_kernel_args(cgh, Args, ArgTypes, NArgs);
+                cgh.parallel_for(range<1>{Range[0]}, *Kernel);
+            });
+            return;
+        case 2:
+            submit_discard(*Queue, [&](handler &cgh) {
+                set_dependent_events(cgh, DepEvents, NDepEvents);
+                set_kernel_args(cgh, Args, ArgTypes, NArgs);
+                cgh.parallel_for(range<2>{Range[0], Range[1]}, *Kernel);
+            });
+            return;
+        case 3:
+            submit_discard(*Queue, [&](handler &cgh) {
+                set_dependent_events(cgh, DepEvents, NDepEvents);
+                set_kernel_args(cgh, Args, ArgTypes, NArgs);
+                cgh.parallel_for(range<3>{Range[0], Range[1], Range[2]},
+                                 *Kernel);
+            });
+            return;
+        default:
+            error_handler("Range cannot be greater than three dimensions.",
+                          __FILE__, __func__, __LINE__, error_level::error);
+            return;
+        }
+    } catch (std::exception const &e) {
+        error_handler(e, __FILE__, __func__, __LINE__, error_level::error);
+    } catch (...) {
+        error_handler("Unknown exception encountered", __FILE__, __func__,
+                      __LINE__, error_level::error);
+    }
+}
+
+void DPCTLQueue_SubmitNDRangeEventless(
+    __dpctl_keep const DPCTLSyclKernelRef KRef,
+    __dpctl_keep const DPCTLSyclQueueRef QRef,
+    __dpctl_keep void **Args,
+    __dpctl_keep const DPCTLKernelArgType *ArgTypes,
+    size_t NArgs,
+    __dpctl_keep const size_t gRange[3],
+    __dpctl_keep const size_t lRange[3],
+    size_t NDims,
+    __dpctl_keep const DPCTLSyclEventRef *DepEvents,
+    size_t NDepEvents)
+{
+    auto Kernel = unwrap<kernel>(KRef);
+    auto Queue = unwrap<queue>(QRef);
+    try {
+        switch (NDims) {
+        case 1:
+            submit_discard(*Queue, [&](handler &cgh) {
+                set_dependent_events(cgh, DepEvents, NDepEvents);
+                set_kernel_args(cgh, Args, ArgTypes, NArgs);
+                cgh.parallel_for(nd_range<1>{{gRange[0]}, {lRange[0]}},
+                                 *Kernel);
+            });
+            return;
+        case 2:
+            submit_discard(*Queue, [&](handler &cgh) {
+                set_dependent_events(cgh, DepEvents, NDepEvents);
+                set_kernel_args(cgh, Args, ArgTypes, NArgs);
+                cgh.parallel_for(
+                    nd_range<2>{{gRange[0], gRange[1]}, {lRange[0], lRange[1]}},
+                    *Kernel);
+            });
+            return;
+        case 3:
+            submit_discard(*Queue, [&](handler &cgh) {
+                set_dependent_events(cgh, DepEvents, NDepEvents);
+                set_kernel_args(cgh, Args, ArgTypes, NArgs);
+                cgh.parallel_for(nd_range<3>{{gRange[0], gRange[1], gRange[2]},
+                                             {lRange[0], lRange[1], lRange[2]}},
+                                 *Kernel);
+            });
+            return;
+        default:
+            error_handler("Range cannot be greater than three dimensions.",
+                          __FILE__, __func__, __LINE__, error_level::error);
+            return;
+        }
+    } catch (std::exception const &e) {
+        error_handler(e, __FILE__, __func__, __LINE__, error_level::error);
+    } catch (...) {
+        error_handler("Unknown exception encountered", __FILE__, __func__,
+                      __LINE__, error_level::error);
+    }
+}
+
 void DPCTLQueue_Wait(__dpctl_keep DPCTLSyclQueueRef QRef)
 {
     // \todo what happens if the QRef is null or a pointer to a valid sycl

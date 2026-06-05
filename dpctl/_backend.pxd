@@ -498,6 +498,27 @@ cdef extern from "syclinterface/dpctl_sycl_queue_interface.h":
         size_t NDims,
         const DPCTLSyclEventRef *DepEvents,
         size_t NDepEvents)
+    cdef void DPCTLQueue_SubmitRangeEventless(
+        const DPCTLSyclKernelRef Ref,
+        const DPCTLSyclQueueRef QRef,
+        void **Args,
+        const _arg_data_type *ArgTypes,
+        size_t NArgs,
+        const size_t Range[3],
+        size_t NDims,
+        const DPCTLSyclEventRef *DepEvents,
+        size_t NDepEvents)
+    cdef void DPCTLQueue_SubmitNDRangeEventless(
+        const DPCTLSyclKernelRef Ref,
+        const DPCTLSyclQueueRef QRef,
+        void **Args,
+        const _arg_data_type *ArgTypes,
+        size_t NArgs,
+        const size_t gRange[3],
+        const size_t lRange[3],
+        size_t NDims,
+        const DPCTLSyclEventRef *DepEvents,
+        size_t NDepEvents)
     cdef void DPCTLQueue_Wait(const DPCTLSyclQueueRef QRef) nogil
     cdef DPCTLSyclEventRef DPCTLQueue_Memcpy(
         const DPCTLSyclQueueRef Q,

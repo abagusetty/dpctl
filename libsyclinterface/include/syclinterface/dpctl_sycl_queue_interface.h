@@ -277,6 +277,47 @@ DPCTLQueue_SubmitNDRange(__dpctl_keep const DPCTLSyclKernelRef KRef,
                          size_t NDepEvents);
 
 /*!
+ * @brief Eventless variant of ``DPCTLQueue_SubmitRange`` (extension
+ * sycl_ext_oneapi_enqueue_functions).
+ *
+ * Submits the kernel without creating a ``sycl::event``. Ordering is implicit
+ * on in-order queues; ``DepEvents`` (which may be cross-queue) are still
+ * honored via ``handler::depends_on``. Synchronize via ``DPCTLQueue_Wait``
+ * when completion is required. Falls back to an event-returning submit (event
+ * discarded) when the extension is unavailable.
+ * @ingroup QueueInterface
+ */
+DPCTL_API
+void DPCTLQueue_SubmitRangeEventless(
+    __dpctl_keep const DPCTLSyclKernelRef KRef,
+    __dpctl_keep const DPCTLSyclQueueRef QRef,
+    __dpctl_keep void **Args,
+    __dpctl_keep const DPCTLKernelArgType *ArgTypes,
+    size_t NArgs,
+    __dpctl_keep const size_t Range[3],
+    size_t NDims,
+    __dpctl_keep const DPCTLSyclEventRef *DepEvents,
+    size_t NDepEvents);
+
+/*!
+ * @brief Eventless variant of ``DPCTLQueue_SubmitNDRange`` (extension
+ * sycl_ext_oneapi_enqueue_functions). See ``DPCTLQueue_SubmitRangeEventless``.
+ * @ingroup QueueInterface
+ */
+DPCTL_API
+void DPCTLQueue_SubmitNDRangeEventless(
+    __dpctl_keep const DPCTLSyclKernelRef KRef,
+    __dpctl_keep const DPCTLSyclQueueRef QRef,
+    __dpctl_keep void **Args,
+    __dpctl_keep const DPCTLKernelArgType *ArgTypes,
+    size_t NArgs,
+    __dpctl_keep const size_t gRange[3],
+    __dpctl_keep const size_t lRange[3],
+    size_t NDims,
+    __dpctl_keep const DPCTLSyclEventRef *DepEvents,
+    size_t NDepEvents);
+
+/*!
  * @brief Calls the ``sycl::queue::submit`` function to do a blocking wait on
  * all enqueued tasks in the queue.
  *

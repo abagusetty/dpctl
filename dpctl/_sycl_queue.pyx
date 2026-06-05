@@ -52,7 +52,9 @@ from ._backend cimport (  # noqa: E211
     DPCTLQueue_SetExternalEvent,
     DPCTLQueue_SubmitBarrierForEvents,
     DPCTLQueue_SubmitNDRange,
+    DPCTLQueue_SubmitNDRangeEventless,
     DPCTLQueue_SubmitRange,
+    DPCTLQueue_SubmitRangeEventless,
     DPCTLQueue_Wait,
     DPCTLRawKernelArg_Available,
     DPCTLRawKernelArg_Create,
@@ -1209,7 +1211,8 @@ cdef class SyclQueue(_SyclQueue):
         list args,
         list gS,
         list lS=None,
-        list dEvents=None
+        list dEvents=None,
+        bint eventless=False
     ):
         """
         Asynchronously submit :class:`dpctl.program.SyclKernel` for execution.
@@ -1228,10 +1231,18 @@ cdef class SyclQueue(_SyclQueue):
             dEvents (List[dpctl.SyclEvent], optional):
                 List of events indicating ordering of this task relative
                 to tasks associated with specified events.
+            eventless (bool, optional):
+                If ``True``, submit the kernel without creating a
+                :class:`dpctl.SyclEvent` (uses the eventless
+                ``sycl_ext_oneapi_enqueue_functions`` path) and return ``None``.
+                Ordering relative to other work on this in-order queue is still
+                guaranteed; any ``dEvents`` (which may be cross-queue) are still
+                honored. Default: ``False``.
 
         Returns:
-            dpctl.SyclEvent:
-                An event associated with submission of the kernel.
+            dpctl.SyclEvent or None:
+                An event associated with submission of the kernel, or ``None``
+                when ``eventless`` is ``True``.
 
         .. note::
             One must ensure that the lifetime of all kernel arguments
@@ -1303,17 +1314,30 @@ cdef class SyclQueue(_SyclQueue):
                     "Range with ", nGS, " not allowed. Range can only have "
                     "between one and three dimensions."
                 )
-            Eref = DPCTLQueue_SubmitRange(
-                kernel.get_kernel_ref(),
-                self.get_queue_ref(),
-                kargs,
-                kargty,
-                len(args),
-                gRange,
-                nGS,
-                depEvents,
-                nDE
-            )
+            if eventless:
+                DPCTLQueue_SubmitRangeEventless(
+                    kernel.get_kernel_ref(),
+                    self.get_queue_ref(),
+                    kargs,
+                    kargty,
+                    len(args),
+                    gRange,
+                    nGS,
+                    depEvents,
+                    nDE
+                )
+            else:
+                Eref = DPCTLQueue_SubmitRange(
+                    kernel.get_kernel_ref(),
+                    self.get_queue_ref(),
+                    kargs,
+                    kargty,
+                    len(args),
+                    gRange,
+                    nGS,
+                    depEvents,
+                    nDE
+                )
         else:
             ret = self._populate_range(gRange, gS, nGS)
             if ret == -1:
@@ -1341,21 +1365,41 @@ cdef class SyclQueue(_SyclQueue):
                     "Local and global ranges need to have same "
                     "number of dimensions."
                 )
-            Eref = DPCTLQueue_SubmitNDRange(
-                kernel.get_kernel_ref(),
-                self.get_queue_ref(),
-                kargs,
-                kargty,
-                len(args),
-                gRange,
-                lRange,
-                nGS,
-                depEvents,
-                nDE
-            )
+            if eventless:
+                DPCTLQueue_SubmitNDRangeEventless(
+                    kernel.get_kernel_ref(),
+                    self.get_queue_ref(),
+                    kargs,
+                    kargty,
+                    len(args),
+                    gRange,
+                    lRange,
+                    nGS,
+                    depEvents,
+                    nDE
+                )
+            else:
+                Eref = DPCTLQueue_SubmitNDRange(
+                    kernel.get_kernel_ref(),
+                    self.get_queue_ref(),
+                    kargs,
+                    kargty,
+                    len(args),
+                    gRange,
+                    lRange,
+                    nGS,
+                    depEvents,
+                    nDE
+                )
         free(kargs)
         free(kargty)
         free(depEvents)
+
+        if eventless:
+            # eventless path produces no SYCL event; ordering is implicit on
+            # the in-order queue. Errors are reported via the SYCL error
+            # handler rather than a NULL return.
+            return None
 
         if Eref is NULL:
             raise SyclKernelSubmitError(

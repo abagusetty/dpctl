@@ -122,6 +122,16 @@ def test_create_kernel_bundle_from_source(ctype_str, dtype, ctypes_ctor):
         q.memcpy(c, c_usm, c.nbytes)
         assert np.allclose(c, ref_c), f"Failed for {gr}, {lr}"
 
+    # eventless kernel submission: returns None, ordering is implicit on the
+    # in-order queue, synchronized by the queue wait below.
+    c_usm.memset()
+    ret = q.submit_async(axpyKernel, args, [n_elems], eventless=True)
+    assert ret is None
+    q.wait()
+    ref_c = a * np.array(d, dtype=dtype) + b
+    q.memcpy(c, c_usm, c.nbytes)
+    assert np.allclose(c, ref_c), "Failed for eventless submission"
+
 
 def test_submit_async():
     try:

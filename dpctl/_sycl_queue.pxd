@@ -95,7 +95,8 @@ cdef public api class SyclQueue (_SyclQueue) [
         list args,
         list gS,
         list lS=*,
-        list dEvents=*
+        list dEvents=*,
+        bint eventless=*
     )
     cpdef SyclEvent submit(
         self,

@@ -323,6 +323,13 @@ dependency.
 - **Out-of-order queue support — removed.** dpctl queues are always in-order;
   the raw-int escape hatch, the `_SequentialOrderManager` and the C++
   sequential order keeper are removed, and all out-of-order branches are gone.
+- **Eventless kernel submission — implemented (opt-in).**
+  `SyclQueue.submit_async(..., eventless=True)` submits a kernel without
+  creating a `sycl::event` (returns `None`), via
+  `DPCTLQueue_SubmitRangeEventless` / `DPCTLQueue_SubmitNDRangeEventless`.
+  `dEvents` (possibly cross-queue) are still honored. The default
+  (`eventless=False`) and the synchronous `submit` keep returning a usable
+  event, since callers wait on / chain those returns.
 - **Memory pool (was B4) — not pursued.** See Part E above (known limitation).
 
 ---
