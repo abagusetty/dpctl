@@ -778,6 +778,28 @@ void DPCTLQueue_MemsetEventless(__dpctl_keep const DPCTLSyclQueueRef QRef,
     }
 }
 
+void DPCTLQueue_PrefetchEventless(__dpctl_keep const DPCTLSyclQueueRef QRef,
+                                  const void *Ptr,
+                                  size_t Count)
+{
+    auto Q = unwrap<queue>(QRef);
+    if (!(Q && Ptr)) {
+        error_handler("QRef or Ptr passed to prefetch were NULL.", __FILE__,
+                      __func__, __LINE__);
+        return;
+    }
+    try {
+#if defined(SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS)
+        namespace syclex = sycl::ext::oneapi::experimental;
+        syclex::prefetch(*Q, const_cast<void *>(Ptr), Count);
+#else
+        Q->prefetch(Ptr, Count);
+#endif
+    } catch (std::exception const &e) {
+        error_handler(e, __FILE__, __func__, __LINE__);
+    }
+}
+
 __dpctl_give DPCTLSyclEventRef
 DPCTLQueue_MemAdvise(__dpctl_keep DPCTLSyclQueueRef QRef,
                      const void *Ptr,

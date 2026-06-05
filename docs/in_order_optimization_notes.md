@@ -316,9 +316,10 @@ dependency.
   `copy_from_device` (same context) / `memset`) now submit without creating a
   per-op `sycl::event` and synchronize with a single `queue.wait()` — the SYCL
   analog of CuPy's `cudaMemcpyAsync` + `stream.synchronize()`. Since dpctl
-  queues are always in-order, there is no out-of-order fallback. `mem_advise`
-  and the cross-context `copy_via_host` keep events (no eventless equivalent /
-  need the dependency edge).
+  queues are always in-order, there is no out-of-order fallback. `prefetch` is
+  likewise eventless (`DPCTLQueue_PrefetchEventless`). `mem_advise` keeps an
+  event (no `enqueue_functions` equivalent), and the cross-context
+  `copy_via_host` keeps events (it needs the cross-queue dependency edge).
 - **Out-of-order queue support — removed.** dpctl queues are always in-order;
   the raw-int escape hatch, the `_SequentialOrderManager` and the C++
   sequential order keeper are removed, and all out-of-order branches are gone.

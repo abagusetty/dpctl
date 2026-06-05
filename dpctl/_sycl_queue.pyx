@@ -48,7 +48,7 @@ from ._backend cimport (  # noqa: E211
     DPCTLQueue_Memcpy,
     DPCTLQueue_MemcpyEventless,
     DPCTLQueue_MemcpyWithEvents,
-    DPCTLQueue_Prefetch,
+    DPCTLQueue_PrefetchEventless,
     DPCTLQueue_SetExternalEvent,
     DPCTLQueue_SubmitBarrierForEvents,
     DPCTLQueue_SubmitNDRange,
@@ -1455,7 +1455,6 @@ cdef class SyclQueue(_SyclQueue):
 
     cpdef prefetch(self, mem, size_t count=0):
         cdef void *ptr
-        cdef DPCTLSyclEventRef ERef = NULL
 
         if isinstance(mem, _Memory):
             ptr = <void*>(<_Memory>mem).get_data_ptr()
@@ -1465,12 +1464,10 @@ cdef class SyclQueue(_SyclQueue):
         if (count <=0 or count > mem.nbytes):
             count = mem.nbytes
 
-        ERef = DPCTLQueue_Prefetch(self._queue_ref, ptr, count)
-        if (ERef is NULL):
-            raise RuntimeError("SyclQueue.prefetch encountered an error")
+        # eventless prefetch hint + queue wait (queues are in-order)
+        DPCTLQueue_PrefetchEventless(self._queue_ref, ptr, count)
         with nogil:
-            DPCTLEvent_Wait(ERef)
-        DPCTLEvent_Delete(ERef)
+            DPCTLQueue_Wait(self._queue_ref)
 
     cpdef mem_advise(self, mem, size_t count, int advice):
         cdef void *ptr

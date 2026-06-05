@@ -385,6 +385,24 @@ void DPCTLQueue_MemsetEventless(__dpctl_keep const DPCTLSyclQueueRef QRef,
                                 size_t Count);
 
 /*!
+ * @brief Eventless USM prefetch (extension sycl_ext_oneapi_enqueue_functions).
+ *
+ * Enqueues a prefetch hint without creating a ``sycl::event``. Ordering is
+ * implicit on in-order queues; synchronize via ``DPCTLQueue_Wait`` when
+ * required. Falls back to an event-returning submit (event discarded) when the
+ * extension is unavailable.
+ *
+ * @param    QRef           An opaque pointer to the ``sycl::queue``.
+ * @param    Ptr            An USM pointer to memory.
+ * @param    Count          Number of bytes to prefetch.
+ * @ingroup QueueInterface
+ */
+DPCTL_API
+void DPCTLQueue_PrefetchEventless(__dpctl_keep const DPCTLSyclQueueRef QRef,
+                                  const void *Ptr,
+                                  size_t Count);
+
+/*!
  * @brief C-API wrapper for ``sycl::queue::mem_advise``.
  *
  * @param    QRef           An opaque pointer to the ``sycl::queue``.
