@@ -37,6 +37,7 @@ from ._backend cimport (  # noqa: E211
     DPCTLQueue_Copy,
     DPCTLQueue_Create,
     DPCTLQueue_Delete,
+    DPCTLQueue_Empty,
     DPCTLQueue_GetBackend,
     DPCTLQueue_GetContext,
     DPCTLQueue_GetDevice,
@@ -1564,6 +1565,32 @@ cdef class SyclQueue(_SyclQueue):
                 1 if DPCTLQueue_IsInOrder(self._queue_ref) else 0
             )
         return bool(self._cached_is_in_order)
+
+    def empty(self):
+        """ empty()
+
+        Non-blocking check of whether all commands submitted to this queue
+        have completed.
+
+        This wraps ``sycl::queue::ext_oneapi_empty`` (extension
+        ``sycl_ext_oneapi_queue_empty``) -- the SYCL analog of CUDA's
+        ``cudaStreamQuery`` / CuPy's ``Stream.done``. It complements the
+        eventless submission style: with no per-operation event to poll, this
+        queries the queue's drain state directly without blocking.
+
+        Returns:
+            bool:
+                ``True`` if all submitted work has completed, ``False``
+                otherwise (also ``False`` if the extension is unavailable).
+
+        .. note::
+            On the Level Zero backend this works regardless of how work was
+            submitted. On some backends (e.g. OpenCL) the underlying query is
+            only reliable for queues that submitted event-returning commands
+            and may fail after eventless submissions; in that case ``False``
+            is returned. Use :meth:`wait` for a blocking guarantee.
+        """
+        return DPCTLQueue_Empty(self._queue_ref)
 
     @property
     def has_enable_profiling(self):

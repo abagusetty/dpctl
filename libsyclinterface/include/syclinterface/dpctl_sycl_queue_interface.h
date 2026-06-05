@@ -474,6 +474,21 @@ DPCTL_API
 bool DPCTLQueue_IsInOrder(__dpctl_keep const DPCTLSyclQueueRef QRef);
 
 /*!
+ * @brief C-API wrapper for sycl::queue::ext_oneapi_empty (extension
+ * sycl_ext_oneapi_queue_empty).
+ *
+ * Non-blocking: returns ``true`` if all commands submitted to the queue have
+ * completed at the moment of the call. Returns ``false`` if the extension is
+ * unavailable, or (on some backends such as OpenCL) if the queue submitted
+ * eventless commands, in which case the query may throw and is reported.
+ *
+ * @param    QRef         An opaque pointer to the ``sycl::queue``.
+ * @ingroup QueueInterface
+ */
+DPCTL_API
+bool DPCTLQueue_Empty(__dpctl_keep const DPCTLSyclQueueRef QRef);
+
+/*!
  * @brief C-API wrapper for
  * sycl::queue::has_property<sycl::property::queue::enable_profiling>() that
  * indicates whether the referenced queue was constructed with this property.

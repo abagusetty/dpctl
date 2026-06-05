@@ -953,6 +953,30 @@ bool DPCTLQueue_IsInOrder(__dpctl_keep const DPCTLSyclQueueRef QRef)
         return false;
 }
 
+bool DPCTLQueue_Empty(__dpctl_keep const DPCTLSyclQueueRef QRef)
+{
+    auto Q = unwrap<queue>(QRef);
+    if (!Q) {
+        error_handler("Argument QRef is NULL", __FILE__, __func__, __LINE__);
+        return false;
+    }
+#if defined(SYCL_EXT_ONEAPI_QUEUE_EMPTY)
+    try {
+        // Non-blocking: true if all submitted commands have completed.
+        return Q->ext_oneapi_empty();
+    } catch (std::exception const &e) {
+        // On some backends (e.g. OpenCL) this throws for queues that submitted
+        // eventless commands; report and conservatively return false.
+        error_handler(e, __FILE__, __func__, __LINE__);
+        return false;
+    }
+#else
+    error_handler("DPCTLQueue_Empty requires sycl_ext_oneapi_queue_empty",
+                  __FILE__, __func__, __LINE__);
+    return false;
+#endif
+}
+
 bool DPCTLQueue_HasEnableProfiling(__dpctl_keep const DPCTLSyclQueueRef QRef)
 {
     auto Q = unwrap<queue>(QRef);

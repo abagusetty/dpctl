@@ -439,3 +439,31 @@ Instead, the assumption lives at the **caller (dpnp/app) layer**, expressed by
 `keep_args_alive_in_order`, and relying on the no-op order manager (empty deps).
 dpctl stays correct for the boundary cases; dpnp gets zero per-op event overhead
 on the compute path. The two coexist with no unsafe global assumption.
+
+---
+
+# Part H — Completion polling & native interop
+
+## H.1 `SyclQueue.empty()` — non-blocking completion (`sycl_ext_oneapi_queue_empty`)
+
+The eventless style removes per-operation events, so an event's status can no
+longer be polled. `SyclQueue.empty()` (`queue::ext_oneapi_empty`) fills that gap:
+a **non-blocking** check of whether all submitted work has drained — the SYCL
+analog of `cudaStreamQuery()` / CuPy's `Stream.done`. Use it for lazy
+synchronization (only `wait()` if not empty), host-side progress/overlap, and
+checking that deferred-free host tasks have run before teardown.
+
+**Backend caveat:** on Level Zero (Aurora) it works regardless of submission
+style. On some backends (OpenCL) the underlying query is only reliable for
+queues that submitted event-returning commands and can fail after eventless
+submissions; `DPCTLQueue_Empty` catches that and returns `false`. For a blocking
+guarantee always use `wait()`.
+
+## H.2 `enqueue_native_command` — role
+
+`dpctl::utils::enqueue_native_command` (`dpctl4pybind11.hpp`,
+`sycl_ext_codeplay_enqueue_native_command`) lets an **external library** enqueue
+a native backend command (a Level-Zero command list / CUDA stream op) *into*
+dpctl's in-order queue, ordered with the surrounding SYCL/dpnp work. It is a
+**downstream-facing capability** — provided for interop (e.g. bridging a native
+kernel into dpnp's stream) and intentionally **not** called internally by dpctl.
