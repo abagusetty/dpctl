@@ -833,6 +833,55 @@ sycl::event keep_args_alive(sycl::queue &q,
     return host_task_ev;
 }
 
+/*! @brief Keep only the non-USM-managed Python objects in ``py_objs`` alive
+    until work already submitted to the in-order queue ``q`` completes.
+
+    Optimization for in-order queues: a USM allocation made on ``q`` already has
+    its release deferred behind a host task ordered after all prior work (see
+    OpaqueSmartPtr_AsyncDelete), so re-anchoring its lifetime here is redundant.
+    This overload therefore SKIPS USM-managed arguments and only schedules the
+    decrement of Python-handle reference counts, saving the USM host task and
+    the dependency marshalling on the common in-order path.
+
+    Correct ONLY when ``q`` is in-order AND every USM-managed argument was
+    allocated on ``q``. For out-of-order queues, or USM allocated on a different
+    queue, use keep_args_alive() instead. No explicit event dependency is
+    threaded: the in-order queue serializes the decref host task after prior
+    submissions. */
+template <std::size_t num>
+sycl::event keep_args_alive_in_order(sycl::queue &q,
+                                     const py::object (&py_objs)[num])
+{
+    std::size_t n_objects_held = 0;
+    std::array<std::shared_ptr<py::handle>, num> shp_arr{};
+
+    for (std::size_t i = 0; i < num; ++i) {
+        const auto &py_obj_i = py_objs[i];
+        // USM-managed args are intentionally skipped: their lifetime is
+        // guaranteed by the in-order deferred free on ``q``.
+        if (!detail::ManagedMemory::is_usm_managed_by_shared_ptr(py_obj_i)) {
+            shp_arr[n_objects_held] = std::make_shared<py::handle>(py_obj_i);
+            shp_arr[n_objects_held]->inc_ref();
+            ++n_objects_held;
+        }
+    }
+
+    sycl::event host_task_ev;
+    if (n_objects_held > 0) {
+        host_task_ev = q.submit([&](sycl::handler &cgh) {
+            cgh.host_task([n_objects_held, shp_arr = std::move(shp_arr)]() {
+                py::gil_scoped_acquire acquire;
+
+                for (std::size_t i = 0; i < n_objects_held; ++i) {
+                    shp_arr[i]->dec_ref();
+                }
+            });
+        });
+    }
+
+    return host_task_ev;
+}
+
 /*! @brief Check if all allocation queues are the same as the
     execution queue */
 template <std::size_t num>
