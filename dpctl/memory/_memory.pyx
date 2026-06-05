@@ -48,7 +48,6 @@ from dpctl._backend cimport (  # noqa: E211
     DPCTLQueue_Memcpy,
     DPCTLQueue_MemcpyEventless,
     DPCTLQueue_MemcpyWithEvents,
-    DPCTLQueue_Memset,
     DPCTLQueue_MemsetEventless,
     DPCTLQueue_Wait,
     DPCTLSyclContextRef,
@@ -140,42 +139,23 @@ cdef void copy_via_host(void *dest_ptr, SyclQueue dest_queue,
 cdef void _sync_usm_memcpy(
     SyclQueue q, void *dst, const void *src, size_t nbytes
 ) except *:
-    """Synchronous USM memcpy. On an in-order queue an eventless submission is
-    used followed by a queue wait (no per-op SYCL event); on an out-of-order
-    queue a precise per-event wait is kept."""
+    """Synchronous USM memcpy: eventless submission followed by a queue wait
+    (no per-op SYCL event). dpctl queues are in-order, so the wait completes
+    exactly this (last) submission."""
     cdef DPCTLSyclQueueRef qref = q.get_queue_ref()
-    cdef DPCTLSyclEventRef ERef = NULL
-    if q.is_in_order:
-        DPCTLQueue_MemcpyEventless(qref, dst, src, nbytes)
-        with nogil:
-            DPCTLQueue_Wait(qref)
-    else:
-        ERef = DPCTLQueue_Memcpy(qref, dst, src, nbytes)
-        if ERef is NULL:
-            raise RuntimeError("memcpy operation encountered an error")
-        with nogil:
-            DPCTLEvent_Wait(ERef)
-        DPCTLEvent_Delete(ERef)
+    DPCTLQueue_MemcpyEventless(qref, dst, src, nbytes)
+    with nogil:
+        DPCTLQueue_Wait(qref)
 
 
 cdef void _sync_usm_memset(
     SyclQueue q, void *dst, int val, size_t nbytes
 ) except *:
-    """Synchronous USM memset, eventless on in-order queues (see
-    :func:`_sync_usm_memcpy`)."""
+    """Synchronous USM memset (eventless; see :func:`_sync_usm_memcpy`)."""
     cdef DPCTLSyclQueueRef qref = q.get_queue_ref()
-    cdef DPCTLSyclEventRef ERef = NULL
-    if q.is_in_order:
-        DPCTLQueue_MemsetEventless(qref, dst, val, nbytes)
-        with nogil:
-            DPCTLQueue_Wait(qref)
-    else:
-        ERef = DPCTLQueue_Memset(qref, dst, val, nbytes)
-        if ERef is NULL:
-            raise RuntimeError("Call to memset resulted in an error")
-        with nogil:
-            DPCTLEvent_Wait(ERef)
-        DPCTLEvent_Delete(ERef)
+    DPCTLQueue_MemsetEventless(qref, dst, val, nbytes)
+    with nogil:
+        DPCTLQueue_Wait(qref)
 
 
 def _to_memory(unsigned char[::1] b, str usm_kind):

@@ -416,13 +416,12 @@ cdef class SyclQueueCreationError(Exception):
 cdef int _parse_queue_properties(object prop) except *:
     cdef int res = 0
     cdef object props
-    # Raw-int escape hatch: an integer property bitmask is honored literally.
-    # This is the only way to obtain an out-of-order queue, since this fork
-    # makes queues in-order by default (see below). For example, ``property=0``
-    # (DPCTL_DEFAULT_PROPERTY) yields an out-of-order queue and ``property=1``
-    # (DPCTL_ENABLE_PROFILING) an out-of-order profiling queue.
+    # dpctl constructs in-order queues only: the in-order flag is always set,
+    # regardless of the requested properties. Out-of-order queues cannot be
+    # created. An integer bitmask is still accepted (e.g. to combine with
+    # ``enable_profiling``) but the in-order flag is forced on.
     if isinstance(prop, int):
-        return <int>prop
+        return (<int>prop) | _queue_property_type._IN_ORDER
     if not isinstance(prop, (tuple, list)):
         props = (prop, )
     else:
@@ -446,9 +445,6 @@ cdef int _parse_queue_properties(object prop) except *:
             raise ValueError(
                 f"queue property '{prop}' is not understood."
             )
-    # In-order by default: every queue requested through the string/tuple API
-    # is constructed in-order. Out-of-order is only reachable via the raw-int
-    # escape hatch above.
     res = res | _queue_property_type._IN_ORDER
     return res
 
@@ -658,10 +654,8 @@ cdef class SyclQueue(_SyclQueue):
         property (str, tuple(str), list(str), int, optional): Defaults to
                 "default". The argument can be either "default", "in_order",
                 "enable_profiling", or a tuple containing these. Queues are
-                constructed **in-order by default**; an out-of-order queue can
-                only be requested through the raw-integer escape hatch,
-                ``property=0`` (or ``property=1`` for an out-of-order queue
-                with profiling enabled).
+                **always constructed in-order**; out-of-order queues are not
+                supported.
 
     Raises:
         SyclQueueCreationError: If the :class:`dpctl.SyclQueue` object
@@ -1414,27 +1408,14 @@ cdef class SyclQueue(_SyclQueue):
 
     cpdef memcpy(self, dest, src, size_t count):
         """Copy memory from `src` to `dst`"""
-        cdef DPCTLSyclEventRef ERef = NULL
-
-        if self.is_in_order:
-            # Eventless fast path: avoid creating a per-op SYCL event. On an
-            # in-order queue this copy is serialized after prior work, so the
-            # queue wait completes exactly this (last) submission.
-            _memcpy_impl(
-                <SyclQueue>self, dest, src, count, NULL, 0, eventless=True
-            )
-            with nogil:
-                DPCTLQueue_Wait(self._queue_ref)
-            return
-
-        ERef = _memcpy_impl(<SyclQueue>self, dest, src, count, NULL, 0)
-        if (ERef is NULL):
-            raise RuntimeError(
-                "SyclQueue.memcpy operation encountered an error"
-            )
+        # Eventless submission: avoid creating a per-op SYCL event. The queue
+        # is in-order, so the copy is serialized after prior work and the queue
+        # wait completes exactly this (last) submission.
+        _memcpy_impl(
+            <SyclQueue>self, dest, src, count, NULL, 0, eventless=True
+        )
         with nogil:
-            DPCTLEvent_Wait(ERef)
-        DPCTLEvent_Delete(ERef)
+            DPCTLQueue_Wait(self._queue_ref)
 
     cpdef SyclEvent memcpy_async(
         self, dest, src, size_t count, list dEvents=None
@@ -1514,8 +1495,7 @@ cdef class SyclQueue(_SyclQueue):
 
     @property
     def is_in_order(self):
-        """``True`` if :class:`.SyclQueue`` is in-order,
-        ``False`` if it is out-of-order.
+        """``True`` if :class:`.SyclQueue`` is in-order.
 
         :Example:
 
@@ -1525,19 +1505,15 @@ cdef class SyclQueue(_SyclQueue):
                 >>> q = dpctl.SyclQueue("cpu")
                 >>> q.is_in_order
                 True
-                >>> q = dpctl.SyclQueue("cpu", property=0)
-                >>> q.is_in_order
-                False
 
         Returns:
             bool:
                 Indicates whether this :class:`.SyclQueue` is in-order.
 
         .. note::
-            Unless requested otherwise, :class:`.SyclQueue` is constructed
-            to be in-order. An out-of-order queue can be requested through
-            the raw-integer escape hatch ``property=0`` (or ``property=1``
-            for an out-of-order queue with profiling enabled).
+            :class:`.SyclQueue` is always constructed in-order; out-of-order
+            queues are not supported. This property therefore always returns
+            ``True`` and is retained for backward compatibility.
         """
         # The in-order property is immutable for the lifetime of the queue,
         # so the result is cached to avoid a C-API call on every access
@@ -1700,14 +1676,10 @@ cdef class SyclQueue(_SyclQueue):
                 The last submitted event, or ``None`` if the queue is empty.
 
         Raises:
-            ValueError: If the queue is not in-order, or the underlying SYCL
-                runtime does not support the extension.
+            ValueError: If the underlying SYCL runtime does not support the
+                extension.
         """
         cdef DPCTLSyclEventRef ERef = NULL
-        if not self.is_in_order:
-            raise ValueError(
-                "get_last_event is only supported on in-order queues"
-            )
         ERef = DPCTLQueue_GetLastEvent(self._queue_ref)
         if ERef is NULL:
             # no commands submitted yet (or extension unavailable)
@@ -1739,13 +1711,9 @@ cdef class SyclQueue(_SyclQueue):
                 The external event the next submission must wait on.
 
         Raises:
-            ValueError: If the queue is not in-order, or the underlying SYCL
-                runtime does not support the extension.
+            ValueError: If the underlying SYCL runtime does not support the
+                extension.
         """
-        if not self.is_in_order:
-            raise ValueError(
-                "set_external_event is only supported on in-order queues"
-            )
         DPCTLQueue_SetExternalEvent(self._queue_ref, event.get_event_ref())
 
     @property
