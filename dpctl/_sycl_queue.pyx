@@ -1669,6 +1669,12 @@ cdef class SyclQueue(_SyclQueue):
         hand off the implicit ordering of an in-order queue to another queue
         without maintaining an event list.
 
+        .. note::
+            The returned event is a snapshot of mutable queue state. When the
+            queue is shared across threads, the caller must serialize this call
+            with the submissions it reasons about (treat an in-order queue like
+            a single-owner stream); dpctl adds no internal lock here.
+
         Returns:
             dpctl.SyclEvent or None:
                 The last submitted event, or ``None`` if the queue is empty.
@@ -1699,6 +1705,14 @@ cdef class SyclQueue(_SyclQueue):
         ``sycl_ext_oneapi_in_order_queue_events``). It injects a cross-queue
         dependency into the in-order stream without threading explicit
         dependent-event lists through every submission.
+
+        .. warning::
+            The ``set_external_event`` -> next-submission sequence is **not
+            atomic**. When the queue is shared across threads, interleaving can
+            attach the external event to the wrong submission. Treat an in-order
+            queue as a single-owner stream and serialize this call with the
+            submission it guards under your own lock; dpctl adds no internal
+            lock here.
 
         Args:
             event (dpctl.SyclEvent):

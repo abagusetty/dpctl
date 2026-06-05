@@ -15,11 +15,11 @@ guards on the Aurora toolchain before relying on it.
 | --- | --- | --- |
 | A. Same-queue in-order keep-alive elision | Implemented (enabler) | `dpctl::utils::keep_args_alive_in_order` in `dpctl4pybind11.hpp`; caller opt-in |
 | B1. Eventless deferred USM free | Implemented | `OpaqueSmartPtr_AsyncDelete` in `dpctl/memory/_opaque_smart_ptr.hpp` |
-| B1. Eventless synchronous memcpy/memset | Resolved — not pursued | see Part E.6 (precise event wait kept; pool is the real win) |
-| B2. `get_last_event` / `set_external_event` | Implemented | C-API + `SyclQueue` methods |
+| B1. Eventless synchronous memcpy/memset | Resolved — not pursued | precise per-event wait kept; see Part E |
+| B2. `get_last_event` / `set_external_event` | Implemented | C-API + `SyclQueue` methods (caller must serialize on shared queues — Part F) |
 | B3. Native-command interop | Implemented | `dpctl::utils::enqueue_native_command` in `dpctl4pybind11.hpp` |
-| E.2. In-order USM caching pool (was B4) | Designed (implementation-ready) | Part E; opt-in core allocator, needs SYCL build + tests |
-| E.4. Runtime async USM pool | Future work | `sycl_ext_oneapi_async_memory_alloc` is *proposed* (not usable yet) |
+| Memory pooling (CuPy-style) | Not pursued — known limitation | Part E |
+| Thread-safety review | Done | Part F |
 
 All implemented items are macro-gated and fall back to current behavior; they
 have **not** been compiled or run — validate on Aurora.
@@ -202,32 +202,14 @@ event completes when the native async work finishes, so dpnp ops submitted after
 it are correctly ordered. This is the stability cornerstone for shared-queue
 interop.
 
-### B4. Stream-ordered USM allocation — `sycl_ext_oneapi_async_memory_alloc` (proposed)
+### B4. Stream-ordered USM allocation — NOT pursued
 
-Macro: `SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC`. This is the long-term "most optimal
-and stable" memory model — the direct analog of CUDA's `cudaMallocAsync` /
-`cudaFreeAsync` with a `memory_pool`:
-```cpp
-namespace syclex = sycl::ext::oneapi::experimental;
-syclex::memory_pool pool(q.get_context(), q.get_device(), sycl::usm::alloc::device);
-void *p = syclex::async_malloc_from_pool(q, nbytes, pool);   // valid after the
-                                                             // malloc command runs
-// ... use p on q ...
-syclex::async_free(q, p);     // freed once its in-order deps are satisfied
-```
-Replaces the host-task deferred-free entirely for in-order queues: the runtime
-orders both allocation and free natively on the queue — no host task, no
-`shared_ptr` copy round trip, and pooled reuse removes per-op driver malloc cost.
-
-Integration sketch (`dpctl/memory/_memory.pyx` + `_opaque_smart_ptr.hpp`):
-- Keep a per-(context,device) `memory_pool` (alongside the cached queue).
-- `_cinit_alloc`: if the extension is present and a queue is known, allocate via
-  `async_malloc_from_pool`; record that the block is pool-managed.
-- `__dealloc__`: for pool-managed blocks on an in-order queue, call `async_free`
-  instead of `OpaqueSmartPtr_AsyncDelete`.
-- **Fallback**: when `SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC` is undefined, keep
-  today's `OpaqueSmartPtr` host-task deferral. Since this extension is still
-  *proposed*, verify availability on your Aurora DPC++ first.
+A pooled / stream-ordered allocator (`sycl_ext_oneapi_async_memory_alloc`, the
+`cudaMallocAsync` analog) was considered and **deliberately not pursued**. See
+Part E: dpctl's lack of a feature-complete memory pool relative to CuPy is a
+known, accepted limitation, and the extension is *proposed* (not usable today).
+dpctl keeps allocating/freeing through the SYCL runtime with the in-order
+deferred free for safety.
 
 ---
 
@@ -242,8 +224,8 @@ API:
   // current event-returning path
 #endif
 ```
-Same pattern for `SYCL_EXT_ONEAPI_IN_ORDER_QUEUE_EVENTS`,
-`SYCL_EXT_ONEAPI_ENQUEUE_NATIVE_COMMAND`, `SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC`.
+Same pattern for `SYCL_EXT_ONEAPI_IN_ORDER_QUEUE_EVENTS` and
+`SYCL_EXT_ONEAPI_ENQUEUE_NATIVE_COMMAND`.
 Expose the detected capabilities to Python (e.g. a `dpctl.sycl_extensions`
 dict) so dpnp/app code can choose the fast path at runtime.
 
@@ -262,94 +244,34 @@ dict) so dpnp/app code can choose the fast path at runtime.
 
 1. **Part A** (pure caller-side; no extension; biggest immediate win for dpnp
    small-op throughput). Benchmark host-side op submission rate.
-2. **B1** eventless deferred-free + eventless internal sync memcpy. Benchmark
-   alloc/free churn and H2D/D2H latency.
+2. **B1** eventless deferred-free. Benchmark alloc/free churn.
 3. **B2** to retire explicit dependency marshalling for in-order (incl. the
-   cross-queue cases). Benchmark dependency-heavy graphs.
+   cross-queue cases). Benchmark dependency-heavy graphs. Honor the shared-queue
+   thread-safety contract in Part F.
 4. **B3** if/when external native kernels share the queue (stability).
-5. **B4** when the async-alloc extension is available on Aurora (replaces the
-   host-task free path; largest allocator-side win).
+
+(Memory pooling / B4 is not pursued — see Part E.)
 
 ---
 
-# Part E — CuPy-informed memory & synchronization design (in-order)
+# Part E — Memory pooling: known limitation (not pursued)
 
-The single biggest performance gap between dpctl and CuPy is **allocation**:
-dpctl calls the SYCL runtime (`DPCTLmalloc_*` / `sycl::free`) on every alloc and
-free, while CuPy's defining optimization is a caching, stream-ordered memory
-pool. This section captures what CuPy does and a concrete, in-order-aware design
-to close the gap. It is **design-only**: the allocator is memory-safety-critical
-core code and must be implemented with a SYCL build and tests, not landed blind.
+A CuPy-style caching memory pool is the usual next allocation optimization, but
+it is **deliberately not pursued** in dpctl. dpctl's lack of a feature-complete
+pool relative to CuPy's (`cupy.cuda.MemoryPool` / `MemoryAsyncPool`) is a known,
+accepted limitation: the implementation is not feature-complete, and the benefit
+for our workloads is limited and does not justify the added correctness and
+multi-threaded-safety surface in core allocation. dpctl continues to
+allocate/free USM through the SYCL runtime (`DPCTLmalloc_*` / `sycl::free`), with
+the in-order deferred free (`OpaqueSmartPtr_AsyncDelete`) for safety.
 
-## E.0 What CuPy does (and why it is fast)
+If pooling is ever revisited, the preferred route is the runtime stream-ordered
+allocator (`sycl_ext_oneapi_async_memory_alloc`, the `cudaMallocAsync` analog),
+so the SYCL runtime — not dpctl — owns pool correctness and thread-safety. That
+extension is currently *proposed* and not usable today, so this remains future
+work and no software pool is implemented in the meantime.
 
-- **Caching memory pool as the default allocator** (`cupy.cuda.MemoryPool`,
-  `SingleDeviceMemoryPool`). `malloc` rounds the size to a bin and pops a cached
-  block from that bin's free-list; `free` returns the block to the pool (it does
-  **not** call the driver). The block is recorded against the **stream** it was
-  last used on, so reuse on that same stream is safe with no synchronization.
-  `free_all_blocks()` returns cached memory to the driver under pressure.
-- **Stream-ordered async pool** (`MemoryAsyncPool`) backed by
-  `cudaMallocAsync` / `cudaFreeAsync` — the driver's own stream-ordered
-  allocator (the CUDA analog of `sycl_ext_oneapi_async_memory_alloc`).
-- **Lifetime by refcount + stream tracking**: an `ndarray` holds a
-  `MemoryPointer`; the underlying block records its last-use stream. Freeing a
-  block while work is still pending is safe because the block is only *reused*
-  once that stream has passed the free point — no host task needed.
-- **Minimal device synchronization**: everything is stream-ordered; explicit
-  sync happens only at host transfer (`.get()`) or `stream.synchronize()`.
-- **Retry-on-OOM**: on allocation failure, `free_all_blocks()` then retry once.
-
-## E.1 dpctl gaps vs CuPy
-
-- Every allocation is a driver round-trip; every free is a driver `sycl::free`
-  (plus, on in-order, a host task via `OpaqueSmartPtr_AsyncDelete`). For array
-  workloads with high alloc/free churn this dominates host overhead.
-- No size-binned reuse, so transient temporaries repeatedly hit the runtime.
-
-## E.2 Design: in-order USM caching pool
-
-- One `UsmPool` per `(sycl::context, device, usm_kind)`. Free-list keyed by a
-  rounded **size bin** (e.g. powers of two, or CuPy's 512 B-rounded bins).
-- `alloc(nbytes, q)`: pop a cached block from the bin `>= nbytes`; else
-  `DPCTLmalloc_*`. Record the block's `last_use_queue = q`.
-- `free(block, q)`: push the block back onto its bin's free-list with
-  `last_use_queue = q` — **no** `sycl::free`, **no** host task.
-- **In-order reuse safety** (the crux):
-  - *Same queue* (`new_q == block.last_use_queue`, in-order): reuse
-    immediately, no sync — the in-order queue serializes the new use after the
-    previous use, exactly like CuPy's same-stream reuse.
-  - *Different queue / context*: inject a dependency instead of synchronizing —
-    take `producer.ext_oneapi_get_last_event()` and
-    `consumer.ext_oneapi_set_external_event(ev)` (this is **B2**), so the first
-    use of the reused block waits on the previous user without a host-side stall.
-    If the extension is unavailable, fall back to waiting on the block's last
-    event before reuse.
-- **Eviction**: `free_all_blocks()` calls `sycl::free` on cached blocks (memory
-  pressure, device teardown). On `USMAllocationError`, flush the matching pool
-  and retry the allocation once (mirrors CuPy).
-- **Opt-in, safe by default**: gate behind `dpctl.memory.set_usm_allocator()` /
-  an env var, default OFF. Default behavior — and stability — is unchanged until
-  explicitly enabled, so the pool can be merged and matured behind a flag.
-
-## E.3 Lifetime integration (`_memory.pyx`, `_opaque_smart_ptr.hpp`)
-
-- `_Memory.__dealloc__`: when the block is pool-managed, return it to the pool
-  (`free(block, self.queue)`) instead of `OpaqueSmartPtr_AsyncDelete`. The
-  in-order reuse policy in E.2 replaces the per-free host task entirely.
-- Track `last_use_queue` on the `_Memory` object. Minimal correct version: set
-  it to `self.queue` (the allocation/owning queue); refine if an array is used
-  on a different queue than it was allocated on (then update on use).
-- Non-pooled allocations keep today's `OpaqueSmartPtr_AsyncDelete` path.
-
-## E.4 When `sycl_ext_oneapi_async_memory_alloc` becomes usable on Aurora
-
-Replace the software pool's `DPCTLmalloc_*`/`sycl::free` core with
-`async_malloc_from_pool` / `async_free` against a `sycl::memory_pool` — the
-runtime then manages binning and stream-ordering natively (the direct
-`cudaMallocAsync` analog). Keep the software pool (E.2) as the portable fallback.
-
-## E.5 Synchronization audit (current code, in-order lens)
+## E.1 Synchronization audit (current code, in-order lens)
 
 Reviewed and found correct — no over-synchronization to remove:
 - `copy_via_host` (`_memory.pyx`): cross-context; threads `E1`→`E2` dependency
@@ -362,15 +284,60 @@ Reviewed and found correct — no over-synchronization to remove:
 - `_NoOpOrderManager.wait()` and `SyclQueue.wait()`: full-queue drain, which is
   the intended "wait for everything" semantics.
 
-## E.6 Resolved TODOs
+## E.2 Resolved TODOs
 
 - **B1 eventless synchronous memcpy/memset — not pursued.** `DPCTLEvent_Wait`
   on the op's event is already precise and backend-agnostic. Eventless +
   `queue.wait()` is only equivalent on in-order queues and would require a new
   C-API entry per op to save a single event object; on a shared queue it can
-  also wait for unrelated work. The real allocation/synchronization win is the
-  pool (E.2), so the sync-memcpy event path is kept as-is.
-- **B4 stream-ordered async allocation — superseded by E.2/E.4.** Implement the
-  software caching pool (E.2) now; switch its core to the runtime async
-  allocator (E.4) once `sycl_ext_oneapi_async_memory_alloc` is available
-  (currently a *proposed*, non-usable extension).
+  also wait for unrelated work. The sync-memcpy event path is kept as-is.
+- **Memory pool (was B4) — not pursued.** See Part E above (known limitation).
+
+---
+
+# Part F — Thread-safety (multi-threaded use)
+
+dpctl relies on the Python GIL plus SYCL's own thread-safety guarantees. The
+in-order optimizations added here were reviewed to hold when several Python
+threads share queues and memory:
+
+- **Cached immutable queue properties** (`_cached_is_in_order`,
+  `_cached_has_enable_profiling`): lazily computed under the GIL; if two threads
+  race they compute the *same* immutable value and write a plain `int` (no torn
+  read), so the race is benign. Safe.
+- **No-op order manager cached on the queue** (`q._no_op_order_manager`): the
+  read/create/store runs under the GIL; a race can at worst construct two
+  equivalent *stateless* `_NoOpOrderManager` objects, one of which wins. The
+  order-manager `_map` is a `ContextVar` (per thread/task), so each thread has
+  its own map; the shared `_in_order_managers` is a `WeakSet` mutated under the
+  GIL. Safe.
+- **`get_device_cached_queue` / `_global_device_queue_cache`**: backed by a
+  `ContextVar` (per thread/task) — no cross-thread mutation. Safe.
+- **Eventless deferred USM free** (`OpaqueSmartPtr_AsyncDelete`): invoked with
+  the GIL released. It performs only atomic `shared_ptr` refcount operations and
+  a thread-safe `sycl::queue::submit`; the host-task body is empty (acquires no
+  GIL). Concurrent frees on the same in-order queue from different threads are
+  each atomic. Safe.
+- **`keep_args_alive` / `async_dec_ref`**: the host task reacquires the GIL and
+  checks interpreter finalization before `Py_DECREF`. Safe.
+
+## F.1 The contract callers MUST honor: shared in-order queues
+
+Treat an in-order queue like a CUDA stream: **one logical owner / submitter at a
+time**. Two facts make a shared in-order queue order-sensitive across threads:
+
+1. The order of submissions to one in-order queue from multiple threads is
+   non-deterministic, so "ordered after prior work" is only well-defined per
+   logical stream of submission.
+2. `SyclQueue.set_external_event(ev)` records a dependency for the **next**
+   submission. The `set_external_event` → submit pair is **not atomic**: if two
+   threads interleave it on the same queue, the external event can attach to the
+   wrong submission. `get_last_event()` is likewise a snapshot of mutable queue
+   state.
+
+When sharing an in-order queue across threads, the caller must serialize the
+`set_external_event`→submit sequence (and submissions in general) under its own
+lock. dpctl intentionally does **not** add an internal lock around these: it
+could not make cross-thread submission *ordering* meaningful, and it would
+penalize the common single-owner (one queue per worker/stream) pattern. This
+contract is documented on `set_external_event` / `get_last_event`.
