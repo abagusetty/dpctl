@@ -39,6 +39,11 @@
 #include <exception>
 #include <iostream>
 
+#if defined(SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS)
+// eventless submit used by OpaqueSmartPtr_AsyncDelete on in-order queues
+#include <sycl/ext/oneapi/experimental/enqueue_functions.hpp>
+#endif
+
 namespace detail
 {
 

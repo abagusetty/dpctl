@@ -48,6 +48,11 @@
 #include "dpctl_sycl_extension_interface.h"
 #endif
 
+#if defined(SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS)
+// eventless submit/memcpy/memset used by DPCTLQueue_*Eventless
+#include <sycl/ext/oneapi/experimental/enqueue_functions.hpp>
+#endif
+
 using namespace sycl;
 
 #define SET_LOCAL_ACCESSOR_ARG(CGH, NDIM, ARGTY, R, IDX)                       \
