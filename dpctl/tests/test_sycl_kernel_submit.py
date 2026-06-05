@@ -353,3 +353,21 @@ def test_submit_local_accessor_arg():
     q.memcpy(dest=res, src=x_usm, count=x.nbytes)
     expected = np.arange(1, x.size + 1, dtype=x.dtype) * (2 * lws)
     assert np.all(res == expected)
+
+    # eventless kernel submission on the in-order queue (exercised on the
+    # Level Zero backend via SPIR-V): returns None, ordering is implicit and
+    # synchronized by the queue wait below.
+    x2_usm = dpm.MemoryUSMDevice(x.nbytes, queue=q)
+    q.memcpy(dest=x2_usm, src=x, count=x.nbytes)
+    ret = q.submit_async(
+        krn,
+        [x2_usm, dpctl.LocalAccessor("i8", (lws,))],
+        [gws],
+        [lws],
+        eventless=True,
+    )
+    assert ret is None
+    q.wait()
+    res2 = np.empty_like(x)
+    q.memcpy(dest=res2, src=x2_usm, count=x.nbytes)
+    assert np.all(res2 == expected)
