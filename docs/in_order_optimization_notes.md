@@ -293,14 +293,18 @@ dependency.
   paths (`SyclQueue.memcpy`, `_Memory.copy_to_host` / `copy_from_host` /
   `copy_from_device` (same context) / `memset`) now submit without creating a
   per-op `sycl::event` and synchronize with a single `queue.wait()` — the SYCL
-  analog of CuPy's `cudaMemcpyAsync` + `stream.synchronize()`. Since dpctl
-  queues are always in-order, there is no out-of-order fallback. `prefetch` is
-  likewise eventless (`DPCTLQueue_PrefetchEventless`). `mem_advise` keeps an
-  event (no `enqueue_functions` equivalent), and the cross-context
-  `copy_via_host` keeps events (it needs the cross-queue dependency edge).
-- **Out-of-order queue support — removed.** dpctl queues are always in-order;
-  the raw-int escape hatch, the `_SequentialOrderManager` and the C++
-  sequential order keeper are removed, and all out-of-order branches are gone.
+  analog of CuPy's `cudaMemcpyAsync` + `stream.synchronize()`. These eventless
+  paths are taken when the queue is in-order; out-of-order queues keep a precise
+  per-event wait. `prefetch` is likewise eventless on in-order queues
+  (`DPCTLQueue_PrefetchEventless`). `mem_advise` keeps an event (no
+  `enqueue_functions` equivalent), and the cross-context `copy_via_host` keeps
+  events (it needs the cross-queue dependency edge).
+- **Out-of-order queues — supported, in-order is the default.** dpctl is
+  in-order by default; pass `property="out_of_order"` (or the raw-int escape
+  hatch `property=0`) for out-of-order. Both the no-op and the event-tracking
+  `_SequentialOrderManager` are retained and dispatched on `is_in_order`, and
+  every in-order fast path (deferred free, eventless memory ops) falls back to
+  the out-of-order-correct behavior when the queue is out-of-order.
 - **Eventless kernel submission — implemented (opt-in).**
   `SyclQueue.submit_async(..., eventless=True)` submits a kernel without
   creating a `sycl::event` (returns `None`), via

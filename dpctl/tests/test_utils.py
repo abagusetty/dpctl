@@ -68,9 +68,12 @@ def test_intel_device_info_validation():
 
 def test_order_manager():
     try:
-        q = dpctl.SyclQueue()
+        # out-of-order queue dispatches to the event-tracking
+        # _SequentialOrderManager
+        q = dpctl.SyclQueue(property="out_of_order")
     except dpctl.SyclQueueCreationError:
         pytest.skip("Queue could not be created for default-selected device")
+    assert q.is_in_order is False
     _som = dpctl.utils.SequentialOrderManager
     _mngr = _som[q]
     assert isinstance(_mngr.num_host_task_events, int)
@@ -131,14 +134,21 @@ def test_no_op_order_manager_is_cached():
 def test_order_manager_dispatch():
     try:
         q_io = dpctl.SyclQueue(property=("in_order",))
+        # in-order by default -> no-op manager
         q_default = dpctl.SyclQueue()
+        # out-of-order -> event-tracking sequential manager
+        q_ooo = dpctl.SyclQueue(property="out_of_order")
     except dpctl.SyclQueueCreationError:
         pytest.skip("Queue could not be created for default-selected device")
-    from dpctl.utils._order_manager import _NoOpOrderManager
+    from dpctl.utils._order_manager import (
+        _NoOpOrderManager,
+        _SequentialOrderManager,
+    )
 
-    # dpctl queues are always in-order, so every queue dispatches to the
-    # no-op order manager.
+    # in-order queues (including the default) dispatch to the no-op manager;
+    # out-of-order queues dispatch to the event-tracking sequential manager.
     _som = dpctl.utils.SequentialOrderManager
     assert isinstance(_som[q_io], _NoOpOrderManager)
     assert isinstance(_som[q_default], _NoOpOrderManager)
+    assert isinstance(_som[q_ooo], _SequentialOrderManager)
     _som.clear()

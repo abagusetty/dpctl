@@ -49,11 +49,14 @@ def test_valid_filter_selectors(valid_filter, check):
     try:
         q = dpctl.SyclQueue(valid_filter)
         device = q.get_sycl_device()
-        # queues are always in-order
+        # queues are in-order by default
         assert q.is_in_order is True
         q2 = dpctl.SyclQueue(valid_filter, property="in_order")
         # assert device == q2.get_sycl_device()
         assert q2.is_in_order is True
+        # out-of-order is opt-in
+        q3 = dpctl.SyclQueue(valid_filter, property="out_of_order")
+        assert q3.is_in_order is False
     except dpctl.SyclQueueCreationError:
         pytest.skip("Failed to create device with supported filter")
     check(device)
@@ -120,26 +123,29 @@ def test_has_enable_profiling():
 
 def test_is_in_order_is_cached():
     """The ``is_in_order`` property is cached and must return stable values
-    across repeated accesses. dpctl queues are always in-order."""
+    across repeated accesses, for both in-order and out-of-order queues."""
     try:
-        q_default = dpctl.SyclQueue()
         q_in_order = dpctl.SyclQueue(property="in_order")
+        q_out_of_order = dpctl.SyclQueue(property="out_of_order")
     except dpctl.SyclQueueCreationError:
         pytest.skip("Queue could not be created for default-selected device")
 
-    assert q_default.is_in_order is True
-    assert q_default.is_in_order is True
     assert q_in_order.is_in_order is True
     assert q_in_order.is_in_order is True
+    assert q_out_of_order.is_in_order is False
+    assert q_out_of_order.is_in_order is False
 
 
 def test_in_order_is_default():
-    """A bare ``SyclQueue()`` is in-order by default in this fork."""
+    """A bare ``SyclQueue()`` is in-order by default; ``out_of_order`` opts
+    out."""
     try:
         q = dpctl.SyclQueue()
+        q_ooo = dpctl.SyclQueue(property="out_of_order")
     except dpctl.SyclQueueCreationError:
         pytest.skip("Queue could not be created for default-selected device")
     assert q.is_in_order is True
+    assert q_ooo.is_in_order is False
 
 
 def test_has_enable_profiling_is_cached():
