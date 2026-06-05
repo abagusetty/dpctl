@@ -724,6 +724,55 @@ DPCTLQueue_Prefetch(__dpctl_keep DPCTLSyclQueueRef QRef,
     }
 }
 
+void DPCTLQueue_MemcpyEventless(__dpctl_keep const DPCTLSyclQueueRef QRef,
+                                void *Dest,
+                                const void *Src,
+                                size_t Count)
+{
+    auto Q = unwrap<queue>(QRef);
+    if (!Q) {
+        error_handler("QRef passed to memcpy was NULL.", __FILE__, __func__,
+                      __LINE__);
+        return;
+    }
+    try {
+#if defined(SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS)
+        // Eventless submission: no sycl::event is created for this op. Ordering
+        // is implicit on in-order queues and the caller waits via the queue.
+        namespace syclex = sycl::ext::oneapi::experimental;
+        syclex::memcpy(*Q, Dest, Src, Count);
+#else
+        // Fallback: submit normally and discard the returned event.
+        Q->memcpy(Dest, Src, Count);
+#endif
+    } catch (std::exception const &e) {
+        error_handler(e, __FILE__, __func__, __LINE__);
+    }
+}
+
+void DPCTLQueue_MemsetEventless(__dpctl_keep const DPCTLSyclQueueRef QRef,
+                                void *USMRef,
+                                uint8_t Value,
+                                size_t Count)
+{
+    auto Q = unwrap<queue>(QRef);
+    if (!(Q && USMRef)) {
+        error_handler("QRef or USMRef passed to memset were NULL.", __FILE__,
+                      __func__, __LINE__);
+        return;
+    }
+    try {
+#if defined(SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS)
+        namespace syclex = sycl::ext::oneapi::experimental;
+        syclex::memset(*Q, USMRef, static_cast<int>(Value), Count);
+#else
+        Q->memset(USMRef, static_cast<int>(Value), Count);
+#endif
+    } catch (std::exception const &e) {
+        error_handler(e, __FILE__, __func__, __LINE__);
+    }
+}
+
 __dpctl_give DPCTLSyclEventRef
 DPCTLQueue_MemAdvise(__dpctl_keep DPCTLSyclQueueRef QRef,
                      const void *Ptr,

@@ -46,8 +46,11 @@ from dpctl._backend cimport (  # noqa: E211
     DPCTLQueue_Delete,
     DPCTLQueue_GetContext,
     DPCTLQueue_Memcpy,
+    DPCTLQueue_MemcpyEventless,
     DPCTLQueue_MemcpyWithEvents,
     DPCTLQueue_Memset,
+    DPCTLQueue_MemsetEventless,
+    DPCTLQueue_Wait,
     DPCTLSyclContextRef,
     DPCTLSyclDeviceRef,
     DPCTLSyclEventRef,
@@ -132,6 +135,47 @@ cdef void copy_via_host(void *dest_ptr, SyclQueue dest_queue,
     with nogil:
         DPCTLEvent_Wait(E2Ref)
     DPCTLEvent_Delete(E2Ref)
+
+
+cdef void _sync_usm_memcpy(
+    SyclQueue q, void *dst, const void *src, size_t nbytes
+) except *:
+    """Synchronous USM memcpy. On an in-order queue an eventless submission is
+    used followed by a queue wait (no per-op SYCL event); on an out-of-order
+    queue a precise per-event wait is kept."""
+    cdef DPCTLSyclQueueRef qref = q.get_queue_ref()
+    cdef DPCTLSyclEventRef ERef = NULL
+    if q.is_in_order:
+        DPCTLQueue_MemcpyEventless(qref, dst, src, nbytes)
+        with nogil:
+            DPCTLQueue_Wait(qref)
+    else:
+        ERef = DPCTLQueue_Memcpy(qref, dst, src, nbytes)
+        if ERef is NULL:
+            raise RuntimeError("memcpy operation encountered an error")
+        with nogil:
+            DPCTLEvent_Wait(ERef)
+        DPCTLEvent_Delete(ERef)
+
+
+cdef void _sync_usm_memset(
+    SyclQueue q, void *dst, int val, size_t nbytes
+) except *:
+    """Synchronous USM memset, eventless on in-order queues (see
+    :func:`_sync_usm_memcpy`)."""
+    cdef DPCTLSyclQueueRef qref = q.get_queue_ref()
+    cdef DPCTLSyclEventRef ERef = NULL
+    if q.is_in_order:
+        DPCTLQueue_MemsetEventless(qref, dst, val, nbytes)
+        with nogil:
+            DPCTLQueue_Wait(qref)
+    else:
+        ERef = DPCTLQueue_Memset(qref, dst, val, nbytes)
+        if ERef is NULL:
+            raise RuntimeError("Call to memset resulted in an error")
+        with nogil:
+            DPCTLEvent_Wait(ERef)
+        DPCTLEvent_Delete(ERef)
 
 
 def _to_memory(unsigned char[::1] b, str usm_kind):
@@ -491,7 +535,6 @@ cdef class _Memory:
         """
         # Cython does the right thing here
         cdef unsigned char[::1] host_buf = obj
-        cdef DPCTLSyclEventRef ERef = NULL
 
         if (host_buf is None):
             # Python object did not have buffer interface
@@ -503,16 +546,13 @@ cdef class _Memory:
                 f"Destination object is too small to accommodate {self.nbytes} "
                 "bytes"
             )
-        # call kernel to copy from
-        ERef = DPCTLQueue_Memcpy(
-            self.queue.get_queue_ref(),
+        # synchronous device-to-host copy (eventless on in-order queues)
+        _sync_usm_memcpy(
+            self.queue,
             <void *>&host_buf[0],      # destination
             <void *>self._memory_ptr,  # source
             <size_t>self.nbytes
         )
-        with nogil:
-            DPCTLEvent_Wait(ERef)
-        DPCTLEvent_Delete(ERef)
 
         return obj
 
@@ -522,23 +562,19 @@ cdef class _Memory:
         """
         cdef const unsigned char[::1] host_buf = obj
         cdef Py_ssize_t buf_len = len(host_buf)
-        cdef DPCTLSyclEventRef ERef = NULL
 
         if (buf_len > self.nbytes):
             raise ValueError(
                 "Source object is too large to be accommodated in "
                 f"{self.nbytes} bytes buffer"
             )
-        # call kernel to copy from
-        ERef = DPCTLQueue_Memcpy(
-            self.queue.get_queue_ref(),
+        # synchronous host-to-device copy (eventless on in-order queues)
+        _sync_usm_memcpy(
+            self.queue,
             <void *>self._memory_ptr,  # destination
             <void *>&host_buf[0],      # source
             <size_t>buf_len
         )
-        with nogil:
-            DPCTLEvent_Wait(ERef)
-        DPCTLEvent_Delete(ERef)
 
     cpdef copy_from_device(self, object sycl_usm_ary):
         """
@@ -546,7 +582,6 @@ cdef class _Memory:
         the memory of the instance
         """
         cdef _USMBufferData src_buf
-        cdef DPCTLSyclEventRef ERef = NULL
         cdef bint same_contexts = False
         cdef SyclQueue this_queue = None
         cdef SyclQueue src_queue = None
@@ -573,15 +608,14 @@ cdef class _Memory:
                 this_queue.get_sycl_context().get_context_ref()
                 )
             if (same_contexts):
-                ERef = DPCTLQueue_Memcpy(
-                    this_queue.get_queue_ref(),
+                # synchronous device-to-device copy within one context
+                # (eventless on in-order queues)
+                _sync_usm_memcpy(
+                    this_queue,
                     <void *>self._memory_ptr,
                     <void *>src_buf.p,
                     <size_t>src_buf.nbytes
                 )
-                with nogil:
-                    DPCTLEvent_Wait(ERef)
-                DPCTLEvent_Delete(ERef)
             else:
                 copy_via_host(
                     <void *>self._memory_ptr, this_queue,  # dest
@@ -595,22 +629,12 @@ cdef class _Memory:
         """
         Populates this USM allocation with given value.
         """
-        cdef DPCTLSyclEventRef ERef = NULL
-
-        ERef = DPCTLQueue_Memset(
-            self.queue.get_queue_ref(),
+        # synchronous fill (eventless on in-order queues)
+        _sync_usm_memset(
+            self.queue,
             <void *>self._memory_ptr,  # destination
             <int> val,
             self.nbytes)
-
-        if ERef is not NULL:
-            DPCTLEvent_Wait(ERef)
-            DPCTLEvent_Delete(ERef)
-            return
-        else:
-            raise RuntimeError(
-                "Call to memset resulted in an error"
-            )
 
     cpdef bytes tobytes(self):
         """

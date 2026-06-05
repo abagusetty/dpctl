@@ -344,6 +344,47 @@ DPCTLQueue_Prefetch(__dpctl_keep DPCTLSyclQueueRef QRef,
                     size_t Count);
 
 /*!
+ * @brief Eventless USM memcpy (extension sycl_ext_oneapi_enqueue_functions).
+ *
+ * Enqueues a memory copy without creating a ``sycl::event``, eliminating the
+ * per-operation event object. Ordering is implicit on in-order queues; the
+ * caller is responsible for synchronizing via ``DPCTLQueue_Wait`` when the copy
+ * must complete. Falls back to an event-returning submit (event discarded) when
+ * the extension is unavailable.
+ *
+ * @param    QRef           An opaque pointer to the ``sycl::queue``.
+ * @param    Dest           Destination USM/host pointer.
+ * @param    Src            Source USM/host pointer.
+ * @param    Count          Number of bytes to copy.
+ * @ingroup QueueInterface
+ */
+DPCTL_API
+void DPCTLQueue_MemcpyEventless(__dpctl_keep const DPCTLSyclQueueRef QRef,
+                                void *Dest,
+                                const void *Src,
+                                size_t Count);
+
+/*!
+ * @brief Eventless USM memset (extension sycl_ext_oneapi_enqueue_functions).
+ *
+ * Enqueues a byte-fill without creating a ``sycl::event``. Ordering is implicit
+ * on in-order queues; synchronize via ``DPCTLQueue_Wait`` when completion is
+ * required. Falls back to an event-returning submit (event discarded) when the
+ * extension is unavailable.
+ *
+ * @param    QRef           An opaque pointer to the ``sycl::queue``.
+ * @param    USMRef         Destination USM pointer.
+ * @param    Value          Byte value to set.
+ * @param    Count          Number of bytes to set.
+ * @ingroup QueueInterface
+ */
+DPCTL_API
+void DPCTLQueue_MemsetEventless(__dpctl_keep const DPCTLSyclQueueRef QRef,
+                                void *USMRef,
+                                uint8_t Value,
+                                size_t Count);
+
+/*!
  * @brief C-API wrapper for ``sycl::queue::mem_advise``.
  *
  * @param    QRef           An opaque pointer to the ``sycl::queue``.

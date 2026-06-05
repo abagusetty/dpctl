@@ -46,6 +46,7 @@ from ._backend cimport (  # noqa: E211
     DPCTLQueue_IsInOrder,
     DPCTLQueue_MemAdvise,
     DPCTLQueue_Memcpy,
+    DPCTLQueue_MemcpyEventless,
     DPCTLQueue_MemcpyWithEvents,
     DPCTLQueue_Prefetch,
     DPCTLQueue_SetExternalEvent,
@@ -476,7 +477,8 @@ cdef DPCTLSyclEventRef _memcpy_impl(
      object src,
      size_t byte_count,
      DPCTLSyclEventRef *dep_events,
-     size_t dep_events_count
+     size_t dep_events_count,
+     bint eventless=False
 ) except *:
     cdef void *c_dst_ptr = NULL
     cdef void *c_src_ptr = NULL
@@ -522,7 +524,14 @@ cdef DPCTLSyclEventRef _memcpy_impl(
              "or a type that supports Python buffer protocol"
         )
 
-    if dep_events_count == 0 or dep_events is NULL:
+    if eventless:
+        # Eventless submission: no SYCL event is produced. Only valid with no
+        # dependent events (caller guarantees ordering, e.g. an in-order queue
+        # synchronized via DPCTLQueue_Wait). Returns NULL by design.
+        DPCTLQueue_MemcpyEventless(
+            q._queue_ref, c_dst_ptr, c_src_ptr, byte_count
+        )
+    elif dep_events_count == 0 or dep_events is NULL:
         ERef = DPCTLQueue_Memcpy(q._queue_ref, c_dst_ptr, c_src_ptr, byte_count)
     else:
         ERef = DPCTLQueue_MemcpyWithEvents(
@@ -1406,6 +1415,17 @@ cdef class SyclQueue(_SyclQueue):
     cpdef memcpy(self, dest, src, size_t count):
         """Copy memory from `src` to `dst`"""
         cdef DPCTLSyclEventRef ERef = NULL
+
+        if self.is_in_order:
+            # Eventless fast path: avoid creating a per-op SYCL event. On an
+            # in-order queue this copy is serialized after prior work, so the
+            # queue wait completes exactly this (last) submission.
+            _memcpy_impl(
+                <SyclQueue>self, dest, src, count, NULL, 0, eventless=True
+            )
+            with nogil:
+                DPCTLQueue_Wait(self._queue_ref)
+            return
 
         ERef = _memcpy_impl(<SyclQueue>self, dest, src, count, NULL, 0)
         if (ERef is NULL):

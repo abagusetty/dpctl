@@ -15,7 +15,7 @@ guards on the Aurora toolchain before relying on it.
 | --- | --- | --- |
 | A. Same-queue in-order keep-alive elision | Implemented (enabler) | `dpctl::utils::keep_args_alive_in_order` in `dpctl4pybind11.hpp`; caller opt-in |
 | B1. Eventless deferred USM free | Implemented | `OpaqueSmartPtr_AsyncDelete` in `dpctl/memory/_opaque_smart_ptr.hpp` |
-| B1. Eventless synchronous memcpy/memset | Resolved — not pursued | precise per-event wait kept; see Part E |
+| B1. Eventless synchronous memcpy/memset | Implemented | `DPCTLQueue_{Memcpy,Memset}Eventless` C-API; used by `SyclQueue.memcpy` and `_Memory.copy_to_host`/`copy_from_host`/`copy_from_device`/`memset` on in-order queues |
 | B2. `get_last_event` / `set_external_event` | Implemented | C-API + `SyclQueue` methods (caller must serialize on shared queues — Part F) |
 | B3. Native-command interop | Implemented | `dpctl::utils::enqueue_native_command` in `dpctl4pybind11.hpp` |
 | Memory pooling (CuPy-style) | Not pursued — known limitation | Part E |
@@ -286,11 +286,17 @@ Reviewed and found correct — no over-synchronization to remove:
 
 ## E.2 Resolved TODOs
 
-- **B1 eventless synchronous memcpy/memset — not pursued.** `DPCTLEvent_Wait`
-  on the op's event is already precise and backend-agnostic. Eventless +
-  `queue.wait()` is only equivalent on in-order queues and would require a new
-  C-API entry per op to save a single event object; on a shared queue it can
-  also wait for unrelated work. The sync-memcpy event path is kept as-is.
+- **B1 eventless synchronous memcpy/memset — implemented.** Added
+  `DPCTLQueue_MemcpyEventless` / `DPCTLQueue_MemsetEventless` (eventless
+  `enqueue_functions` submit, fallback discards the event). On **in-order**
+  queues the synchronous paths (`SyclQueue.memcpy`, `_Memory.copy_to_host` /
+  `copy_from_host` / `copy_from_device` (same context) / `memset`) now submit
+  without creating a per-op `sycl::event` and synchronize with a single
+  `queue.wait()` — the SYCL analog of CuPy's `cudaMemcpyAsync` +
+  `stream.synchronize()`. **Out-of-order** queues keep the precise per-event
+  wait (no behavior change on the escape-hatch path). `mem_advise` and the
+  cross-context `copy_via_host` keep events (no eventless equivalent / need the
+  dependency edge).
 - **Memory pool (was B4) — not pursued.** See Part E above (known limitation).
 
 ---
