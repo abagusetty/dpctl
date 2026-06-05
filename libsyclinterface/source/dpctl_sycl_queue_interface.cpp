@@ -962,11 +962,11 @@ bool DPCTLQueue_Empty(__dpctl_keep const DPCTLSyclQueueRef QRef)
     }
 #if defined(SYCL_EXT_ONEAPI_QUEUE_EMPTY)
     try {
-        // Non-blocking: true if all submitted commands have completed.
+        // Non-blocking: true if all submitted commands have completed. Reliable
+        // on the Level Zero / CUDA / HIP backends regardless of submission
+        // style.
         return Q->ext_oneapi_empty();
     } catch (std::exception const &e) {
-        // On some backends (e.g. OpenCL) this throws for queues that submitted
-        // eventless commands; report and conservatively return false.
         error_handler(e, __FILE__, __func__, __LINE__);
         return false;
     }

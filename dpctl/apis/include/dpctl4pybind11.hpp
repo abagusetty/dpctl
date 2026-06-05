@@ -37,7 +37,7 @@
 #include <vector>
 
 #if defined(SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS)
-// eventless submit used by keep_args_alive_in_order / enqueue_native_command
+// eventless submit used by keep_args_alive_in_order
 #include <sycl/ext/oneapi/experimental/enqueue_functions.hpp>
 #endif
 
@@ -904,37 +904,6 @@ bool queues_are_compatible(const sycl::queue &exec_q,
     }
     return true;
 }
-
-#if defined(SYCL_EXT_ONEAPI_ENQUEUE_NATIVE_COMMAND)
-/*! @brief Order a native backend command inside SYCL queue ``q``.
-
-    Submits a command that invokes ``native_fn`` with the backend-native queue
-    (e.g. a Level-Zero command list / CUDA stream) obtained from the SYCL
-    interop_handle, so that work enqueued by an external library is ordered with
-    respect to other commands on ``q``. This is the supported way to share an
-    in-order queue with a native library: on an in-order queue ``deps`` is
-    usually empty and the native command is serialized after prior work; the
-    returned event completes when the native asynchronous work finishes, so
-    subsequent SYCL commands on ``q`` are ordered after it.
-
-    ``Backend`` defaults to Level Zero (Aurora / Intel GPU). ``native_fn`` is
-    invoked as ``native_fn(native_queue)`` where ``native_queue`` is the native
-    handle returned by ``interop_handle::get_native_queue<Backend>()``. */
-template <sycl::backend Backend = sycl::backend::ext_oneapi_level_zero,
-          typename NativeQueueFn>
-sycl::event enqueue_native_command(sycl::queue &q,
-                                   NativeQueueFn &&native_fn,
-                                   const std::vector<sycl::event> &deps = {})
-{
-    return q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(deps);
-        cgh.ext_codeplay_enqueue_native_command(
-            [native_fn](sycl::interop_handle ih) {
-                native_fn(ih.get_native_queue<Backend>());
-            });
-    });
-}
-#endif
 
 } // end namespace utils
 

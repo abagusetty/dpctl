@@ -1,8 +1,9 @@
 # In-order queue optimization & SYCL-extension strengthening (design notes)
 
-Target: Aurora (Intel Data Center GPU Max / PVC, Level Zero backend), recent
-Intel DPC++. Goal: make dpctl's in-order-queue path the most optimal and stable
-design for performance and stability — a CUDA-stream-class model.
+Targets: the Level Zero, CUDA and HIP backends (in that order of preference;
+OpenCL is not a target), recent Intel/oneAPI DPC++. Goal: make dpctl's
+in-order-queue path the most optimal and stable design for performance and
+stability — a CUDA-stream-class model.
 
 These are **sketches to implement and benchmark on hardware**. They were written
 without a SYCL build available, so every item is gated behind a feature-test
@@ -17,7 +18,7 @@ guards on the Aurora toolchain before relying on it.
 | B1. Eventless deferred USM free | Implemented | `OpaqueSmartPtr_AsyncDelete` in `dpctl/memory/_opaque_smart_ptr.hpp` |
 | B1. Eventless synchronous memcpy/memset | Implemented | `DPCTLQueue_{Memcpy,Memset}Eventless` C-API; used by `SyclQueue.memcpy` and `_Memory.copy_to_host`/`copy_from_host`/`copy_from_device`/`memset` on in-order queues |
 | B2. `get_last_event` / `set_external_event` | Implemented | C-API + `SyclQueue` methods (caller must serialize on shared queues — Part F) |
-| B3. Native-command interop | Implemented | `dpctl::utils::enqueue_native_command` in `dpctl4pybind11.hpp` |
+| B3. Native-command interop | Removed (unused) | targets L0/CUDA/HIP via ordinary SYCL submission |
 | Memory pooling (CuPy-style) | Not pursued — known limitation | Part E |
 | Thread-safety review | Done | Part F |
 
@@ -171,36 +172,13 @@ justify keeping explicit deps can be expressed via `set_external_event` /
 board for in-order queues and rely on the queue's own last-event tracking.
 (Throws if the queue is not in-order — gate on `q.is_in_order`.)
 
-### B3. Order native/external kernels into the in-order queue — `sycl_ext_codeplay_enqueue_native_command` (experimental)
+### B3. Order native/external kernels into the in-order queue — removed
 
-Macro: `SYCL_EXT_ONEAPI_ENQUEUE_NATIVE_COMMAND`. This is the correct mechanism
-for the original motivation — an external C++/Level-Zero library sharing dpctl's
-in-order queue — replacing "pass the raw queue and hope ordering holds." It hooks
-the native command into the SYCL dependency graph so it is ordered w.r.t. dpnp
-ops on the same in-order queue. Add a helper to `dpctl4pybind11.hpp`:
-
-```cpp
-// Order a native Level-Zero (or other backend) command inside `q`.
-template <typename NativeCallable>
-sycl::event enqueue_native_command(
-    sycl::queue &q, NativeCallable &&fn,
-    const std::vector<sycl::event> &deps = {})
-{
-    return q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(deps);
-        cgh.ext_codeplay_enqueue_native_command(
-            [=](sycl::interop_handle ih) {
-                auto native_q =
-                    ih.get_native_queue<sycl::backend::ext_oneapi_level_zero>();
-                fn(native_q);   // library enqueues onto the native L0 queue/list
-            });
-    });
-}
-```
-On an in-order queue, `deps` is usually empty (implicit ordering); the returned
-event completes when the native async work finishes, so dpnp ops submitted after
-it are correctly ordered. This is the stability cornerstone for shared-queue
-interop.
+A helper around `sycl_ext_codeplay_enqueue_native_command` was added and then
+**removed as unused**: dpctl had no internal caller, and the project targets
+Level Zero / CUDA / HIP through ordinary SYCL submission. If native-library
+interop on a shared in-order queue is needed later, the consumer can wrap
+`handler::ext_codeplay_enqueue_native_command` directly.
 
 ### B4. Stream-ordered USM allocation — NOT pursued
 
@@ -225,7 +203,7 @@ API:
 #endif
 ```
 Same pattern for `SYCL_EXT_ONEAPI_IN_ORDER_QUEUE_EVENTS` and
-`SYCL_EXT_ONEAPI_ENQUEUE_NATIVE_COMMAND`.
+`SYCL_EXT_ONEAPI_QUEUE_EMPTY`.
 Expose the detected capabilities to Python (e.g. a `dpctl.sycl_extensions`
 dict) so dpnp/app code can choose the fast path at runtime.
 
@@ -248,7 +226,8 @@ dict) so dpnp/app code can choose the fast path at runtime.
 3. **B2** to retire explicit dependency marshalling for in-order (incl. the
    cross-queue cases). Benchmark dependency-heavy graphs. Honor the shared-queue
    thread-safety contract in Part F.
-4. **B3** if/when external native kernels share the queue (stability).
+4. (B3 native-command interop removed — wrap
+   `ext_codeplay_enqueue_native_command` in the consumer if ever needed.)
 
 (Memory pooling / B4 is not pursued — see Part E.)
 
@@ -300,8 +279,7 @@ host task is the correct mechanism and none are removable):
 
 `depends_on` usages — caller-provided dependencies that may be cross-queue are
 retained (correct): `memcpy_async` / `DPCTLQueue_MemcpyWithEvents`,
-`submit_barrier`, kernel `submit`, `async_dec_ref`, `enqueue_native_command`,
-`_submit_empty_task`. The one **redundant** edge — `keep_args_alive` chaining
+`submit_barrier`, kernel `submit`, `async_dec_ref`, `_submit_empty_task`. The one **redundant** edge — `keep_args_alive` chaining
 the second host task onto the first via `depends_on(host_task_ev)` — was removed:
 on an in-order queue the second host task is already serialized after the first
 (which carries `depends`), so only the first submission needs the explicit
@@ -420,8 +398,8 @@ eventless hot path:
   peer-to-peer, multi-GPU;
 - **interchange** — DLPack import, `__sycl_usm_array_interface__`,
   `dpnp.asarray(x, sycl_queue=other)` migration;
-- **native / library interop** — `enqueue_native_command`, oneMKL on another
-  queue;
+- **native / library interop** — a native (L0/CUDA/HIP) library or oneMKL
+  enqueueing on another queue;
 - **user multi-stream programs** — explicit overlap / pipelining across several
   in-order queues, coordinated with `dEvents` / `set_external_event` /
   `get_last_event`.
@@ -442,7 +420,7 @@ on the compute path. The two coexist with no unsafe global assumption.
 
 ---
 
-# Part H — Completion polling & native interop
+# Part H — Completion polling
 
 ## H.1 `SyclQueue.empty()` — non-blocking completion (`sycl_ext_oneapi_queue_empty`)
 
@@ -451,19 +429,7 @@ longer be polled. `SyclQueue.empty()` (`queue::ext_oneapi_empty`) fills that gap
 a **non-blocking** check of whether all submitted work has drained — the SYCL
 analog of `cudaStreamQuery()` / CuPy's `Stream.done`. Use it for lazy
 synchronization (only `wait()` if not empty), host-side progress/overlap, and
-checking that deferred-free host tasks have run before teardown.
-
-**Backend caveat:** on Level Zero (Aurora) it works regardless of submission
-style. On some backends (OpenCL) the underlying query is only reliable for
-queues that submitted event-returning commands and can fail after eventless
-submissions; `DPCTLQueue_Empty` catches that and returns `false`. For a blocking
-guarantee always use `wait()`.
-
-## H.2 `enqueue_native_command` — role
-
-`dpctl::utils::enqueue_native_command` (`dpctl4pybind11.hpp`,
-`sycl_ext_codeplay_enqueue_native_command`) lets an **external library** enqueue
-a native backend command (a Level-Zero command list / CUDA stream op) *into*
-dpctl's in-order queue, ordered with the surrounding SYCL/dpnp work. It is a
-**downstream-facing capability** — provided for interop (e.g. bridging a native
-kernel into dpnp's stream) and intentionally **not** called internally by dpctl.
+checking that deferred-free host tasks have run before teardown. It is reliable
+on the Level Zero / CUDA / HIP backends (the project's targets) regardless of
+submission style. `DPCTLQueue_Empty` catches any backend exception and returns
+`false`; for a blocking guarantee always use `wait()`.

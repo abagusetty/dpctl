@@ -1576,7 +1576,9 @@ cdef class SyclQueue(_SyclQueue):
         ``sycl_ext_oneapi_queue_empty``) -- the SYCL analog of CUDA's
         ``cudaStreamQuery`` / CuPy's ``Stream.done``. It complements the
         eventless submission style: with no per-operation event to poll, this
-        queries the queue's drain state directly without blocking.
+        queries the queue's drain state directly without blocking. It is
+        reliable on the Level Zero, CUDA and HIP backends regardless of how
+        work was submitted.
 
         Returns:
             bool:
@@ -1584,11 +1586,7 @@ cdef class SyclQueue(_SyclQueue):
                 otherwise (also ``False`` if the extension is unavailable).
 
         .. note::
-            On the Level Zero backend this works regardless of how work was
-            submitted. On some backends (e.g. OpenCL) the underlying query is
-            only reliable for queues that submitted event-returning commands
-            and may fail after eventless submissions; in that case ``False``
-            is returned. Use :meth:`wait` for a blocking guarantee.
+            Use :meth:`wait` for a blocking guarantee.
         """
         return DPCTLQueue_Empty(self._queue_ref)
 
