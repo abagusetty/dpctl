@@ -120,12 +120,26 @@ void OpaqueSmartPtr_AsyncDelete(void *opaque_ptr, DPCTLSyclQueueRef QRef)
             // copy the shared_ptr, extending the allocation's lifetime until
             // the host task below executes and the copy is destroyed
             std::shared_ptr<void> shp_copy = *sptr;
+#if defined(SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS)
+            // Eventless submission (sycl_ext_oneapi_enqueue_functions): on an
+            // in-order queue ordering is implicit, so there is no need to
+            // create a sycl::event for this fire-and-forget host task. This
+            // removes the per-free event object on the common in-order path.
+            namespace syclex = sycl::ext::oneapi::experimental;
+            syclex::submit(*q_ptr, [&](sycl::handler &cgh) {
+                cgh.host_task([shp = std::move(shp_copy)]() {
+                    // no body; ``shp`` is released here, after prior work on
+                    // the in-order queue has completed
+                });
+            });
+#else
             q_ptr->submit([&](sycl::handler &cgh) {
                 cgh.host_task([shp = std::move(shp_copy)]() {
                     // no body; ``shp`` is released here, after prior work on
                     // the in-order queue has completed
                 });
             });
+#endif
         } catch (const std::exception &e) {
             std::cout << "Deferred USM release submission caught an exception: "
                       << e.what() << std::endl;
