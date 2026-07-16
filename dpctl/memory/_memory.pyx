@@ -81,6 +81,8 @@ cdef extern from "_opaque_smart_ptr.hpp":
     void * OpaqueSmartPtr_Make(void *, DPCTLSyclQueueRef) nogil
     void * OpaqueSmartPtr_Copy(void *) nogil
     void OpaqueSmartPtr_Delete(void *) nogil
+    void OpaqueSmartPtr_AsyncDelete(void *, DPCTLSyclQueueRef) nogil
+    void OpaqueSmartPtr_DrainPendingFrees(DPCTLSyclQueueRef) nogil
     void * OpaqueSmartPtr_Get(void *) nogil
 
 
@@ -176,6 +178,14 @@ cdef class _Memory:
                 queue = get_device_cached_queue(dpctl.SyclDevice())
 
             QRef = queue.get_queue_ref()
+            # On an in-order queue, USM frees are deferred behind host tasks
+            # (see OpaqueSmartPtr_AsyncDelete). Drain any pending frees for this
+            # queue before allocating so the allocator cannot reuse a virtual
+            # address whose sycl::free host task has not run yet, which would
+            # cause an intermittent use-after-free / GPU page fault.
+            if queue.is_in_order:
+                with nogil:
+                    OpaqueSmartPtr_DrainPendingFrees(QRef)
             if (ptr_type == b"shared"):
                 if alignment > 0:
                     with nogil:

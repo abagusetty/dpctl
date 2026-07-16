@@ -36,8 +36,13 @@
 #include <sycl/sycl.hpp>
 #include <utility>
 
+#include <algorithm>
 #include <exception>
+#include <functional>
 #include <iostream>
+#include <mutex>
+#include <unordered_map>
+#include <vector>
 
 namespace detail
 {
@@ -67,6 +72,76 @@ private:
 
 } // namespace detail
 
+namespace detail
+{
+
+// Registry of deferred-free host-task events, keyed by the underlying
+// ``sycl::queue``. ``sycl::malloc_device`` (allocation) is a synchronous
+// host call, but on an in-order queue ``sycl::free`` is deferred behind a
+// host task (see ``OpaqueSmartPtr_AsyncDelete``). The Level-Zero USM
+// allocator can hand back a virtual address whose pending free host task
+// has not run yet, so a fresh allocation may alias memory that is about to
+// be unmapped -- a use-after-free that manifests as an intermittent GPU
+// page fault. To close that window, allocation drains the pending frees for
+// its queue before calling ``malloc_*``.
+//
+// Keyed by ``sycl::queue`` value (via ``std::hash<sycl::queue>`` and
+// ``operator==``) rather than the wrapper pointer, so it stays correct when
+// higher layers (e.g. dpnp) reconstruct fresh ``sycl::queue`` copies around
+// the same underlying backend queue.
+class PendingFreeRegistry
+{
+public:
+    static PendingFreeRegistry &instance()
+    {
+        static PendingFreeRegistry inst;
+        return inst;
+    }
+
+    void add(const sycl::queue &q, sycl::event ev)
+    {
+        std::lock_guard<std::mutex> lock(_mtx);
+        auto &events = _map[q];
+        // Prune events that have already completed to bound growth.
+        events.erase(std::remove_if(events.begin(), events.end(),
+                                    [](const sycl::event &e) {
+                                        return e.get_info<sycl::info::event::
+                                                              command_execution_status>() ==
+                                               sycl::info::event_command_status::
+                                                   complete;
+                                    }),
+                     events.end());
+        events.push_back(std::move(ev));
+    }
+
+    void drain(const sycl::queue &q)
+    {
+        std::vector<sycl::event> events;
+        {
+            std::lock_guard<std::mutex> lock(_mtx);
+            auto it = _map.find(q);
+            if (it == _map.end() || it->second.empty()) {
+                return;
+            }
+            events.swap(it->second);
+        }
+        for (auto &ev : events) {
+            try {
+                ev.wait();
+            } catch (const std::exception &e) {
+                std::cout << "Draining pending USM free caught an exception: "
+                          << e.what() << std::endl;
+            }
+        }
+    }
+
+private:
+    std::mutex _mtx;
+    std::unordered_map<sycl::queue, std::vector<sycl::event>> _map;
+};
+
+} // namespace detail
+
 void *OpaqueSmartPtr_Make(void *usm_ptr, const sycl::queue &q)
 {
     detail::USMDeleter _deleter(q);
@@ -92,6 +167,58 @@ void OpaqueSmartPtr_Delete(void *opaque_ptr)
     auto sptr = reinterpret_cast<std::shared_ptr<void> *>(opaque_ptr);
 
     delete sptr;
+}
+
+// Release the USM allocation managed by ``opaque_ptr`` in a way that is
+// ordered against work already submitted to the given queue. A host task
+// holding a copy of the managing ``shared_ptr`` is submitted to the queue;
+// the allocation is freed only when that host task runs. On an in-order
+// queue this happens after all previously submitted work (including kernels
+// enqueued by external libraries that share the queue) has completed, which
+// avoids releasing memory that is still in use. The original ``opaque_ptr``
+// is deleted before returning. Falls back to an eager delete if the host
+// task cannot be submitted.
+void OpaqueSmartPtr_AsyncDelete(void *opaque_ptr, DPCTLSyclQueueRef QRef)
+{
+    auto sptr = reinterpret_cast<std::shared_ptr<void> *>(opaque_ptr);
+    sycl::queue *q_ptr = dpctl::syclinterface::unwrap<sycl::queue>(QRef);
+
+    if (q_ptr) {
+        try {
+            // copy the shared_ptr, extending the allocation's lifetime until
+            // the host task below executes and the copy is destroyed
+            std::shared_ptr<void> shp_copy = *sptr;
+            sycl::event free_ev = q_ptr->submit([&](sycl::handler &cgh) {
+                cgh.host_task([shp = std::move(shp_copy)]() {
+                    // no body; ``shp`` is released here, after prior work on
+                    // the (in-order) queue has completed
+                });
+            });
+            // Record the free event so a subsequent allocation on this queue
+            // can wait for it before reusing the released virtual address.
+            detail::PendingFreeRegistry::instance().add(*q_ptr,
+                                                        std::move(free_ev));
+        } catch (const std::exception &e) {
+            std::cout << "Deferred USM release submission caught an exception: "
+                      << e.what() << std::endl;
+            // fall through: the eager delete below still releases the memory
+        }
+    }
+
+    delete sptr;
+}
+
+// Wait for any deferred USM free host tasks previously submitted on the queue
+// identified by ``QRef`` to complete, then clear them from the registry. This
+// must be called before allocating on an in-order queue to prevent the USM
+// allocator from reusing a virtual address whose ``sycl::free`` host task is
+// still pending (which would lead to a use-after-free).
+void OpaqueSmartPtr_DrainPendingFrees(DPCTLSyclQueueRef QRef)
+{
+    sycl::queue *q_ptr = dpctl::syclinterface::unwrap<sycl::queue>(QRef);
+    if (q_ptr) {
+        detail::PendingFreeRegistry::instance().drain(*q_ptr);
+    }
 }
 
 void *OpaqueSmartPtr_Copy(void *opaque_ptr)
