@@ -1,6 +1,6 @@
 #                      Data Parallel Control (dpctl)
 #
-# Copyright 2020-2025 Intel Corporation
+# Copyright 2020 Intel Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -101,6 +101,7 @@ cdef extern from "syclinterface/dpctl_sycl_enum_types.h":
         _emulated                           "emulated",
         _is_component                       "is_component",
         _is_composite                       "is_composite",
+        _ext_oneapi_ipc_memory              "ext_oneapi_ipc_memory",
 
     ctypedef enum _partition_affinity_domain_type \
             "DPCTLPartitionAffinityDomainType":
@@ -431,12 +432,18 @@ cdef extern from "syclinterface/dpctl_sycl_context_interface.h":
 
 
 cdef extern from "syclinterface/dpctl_sycl_kernel_bundle_interface.h":
+    ctypedef struct _spec_const "DPCTLSpecConst":
+        uint32_t id
+        size_t size
+        const void *value
     cdef DPCTLSyclKernelBundleRef DPCTLKernelBundle_CreateFromSpirv(
         const DPCTLSyclContextRef Ctx,
         const DPCTLSyclDeviceRef Dev,
         const void *IL,
         size_t Length,
-        const char *CompileOpts)
+        const char *CompileOpts,
+        size_t NumSpecConsts,
+        const _spec_const *SpecConsts)
     cdef DPCTLSyclKernelBundleRef DPCTLKernelBundle_CreateFromOCLSource(
         const DPCTLSyclContextRef Ctx,
         const DPCTLSyclDeviceRef Dev,
@@ -505,6 +512,18 @@ cdef extern from "syclinterface/dpctl_sycl_queue_interface.h":
         const void *Src,
         size_t Count)
     cdef DPCTLSyclEventRef DPCTLQueue_MemcpyWithEvents(
+        const DPCTLSyclQueueRef Q,
+        void *Dest,
+        const void *Src,
+        size_t Count,
+        const DPCTLSyclEventRef *depEvents,
+        size_t depEventsCount)
+    cdef DPCTLSyclEventRef DPCTLQueue_CopyData(
+        const DPCTLSyclQueueRef Q,
+        void *Dest,
+        const void *Src,
+        size_t Count)
+    cdef DPCTLSyclEventRef DPCTLQueue_CopyDataWithEvents(
         const DPCTLSyclQueueRef Q,
         void *Dest,
         const void *Src,
@@ -583,6 +602,7 @@ cdef extern from "syclinterface/dpctl_sycl_extension_interface.h":
         DPCTLSyclWorkGroupMemoryRef Ref)
 
     cdef bint DPCTLWorkGroupMemory_Available()
+    cdef bint DPCTLIPCMem_Available()
 
     cdef struct DPCTLOpaqueRawKernelArg
     ctypedef DPCTLOpaqueRawKernelArg *DPCTLSyclRawKernelArgRef
@@ -594,3 +614,19 @@ cdef extern from "syclinterface/dpctl_sycl_extension_interface.h":
         DPCTLSyclRawKernelArgRef Ref)
 
     cdef bint DPCTLRawKernelArg_Available()
+
+cdef extern from "syclinterface/dpctl_sycl_ipc_memory_interface.h":
+    cdef int DPCTLIPCMem_GetHandle(
+        DPCTLSyclUSMRef Ptr,
+        DPCTLSyclContextRef CRef,
+        char **DataOut,
+        size_t *SizeOut)
+    cdef DPCTLSyclUSMRef DPCTLIPCMem_OpenHandle(
+        const char *HandleData,
+        size_t HandleDataSize,
+        DPCTLSyclContextRef CRef,
+        DPCTLSyclDeviceRef DRef)
+    cdef void DPCTLIPCMem_CloseHandle(
+        DPCTLSyclUSMRef MappedPtr,
+        DPCTLSyclContextRef CRef)
+    cdef void DPCTLIPCMem_FreeHandleData(char *Data)

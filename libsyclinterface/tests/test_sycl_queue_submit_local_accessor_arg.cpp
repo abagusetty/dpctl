@@ -2,7 +2,7 @@
 //
 //                      Data Parallel Control (dpctl)
 //
-// Copyright 2020-2025 Intel Corporation
+// Copyright 2024 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -237,7 +237,8 @@ struct TestQueueSubmitWithLocalAccessor : public ::testing::Test
         auto CRef = DPCTLQueue_GetContext(QRef);
 
         KBRef = DPCTLKernelBundle_CreateFromSpirv(
-            CRef, DRef, spirvBuffer_.data(), spirvFileSize_, nullptr);
+            CRef, DRef, spirvBuffer_.data(), spirvFileSize_, nullptr, 0,
+            nullptr);
         DPCTLDevice_Delete(DRef);
         DPCTLDeviceSelector_Delete(DSRef);
     }
@@ -276,7 +277,8 @@ struct TestQueueSubmitWithLocalAccessorFP64 : public ::testing::Test
         auto CRef = DPCTLQueue_GetContext(QRef);
 
         KBRef = DPCTLKernelBundle_CreateFromSpirv(
-            CRef, DRef, spirvBuffer_.data(), spirvFileSize_, nullptr);
+            CRef, DRef, spirvBuffer_.data(), spirvFileSize_, nullptr, 0,
+            nullptr);
         DPCTLDeviceSelector_Delete(DSRef);
     }
 

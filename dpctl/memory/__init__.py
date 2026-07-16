@@ -1,6 +1,6 @@
 #                      Data Parallel Control (dpctl)
 #
-# Copyright 2020-2025 Intel Corporation
+# Copyright 2020 Intel Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,17 +30,27 @@ objects to maniputalate USM memory using NumPy or `bytearray`,
 """
 
 from ._memory import (
+    IPCMemoryHandle,
+    MemoryIPCDevice,
     MemoryUSMDevice,
     MemoryUSMHost,
     MemoryUSMShared,
+    SyclIPCCloseMemHandle,
+    SyclIPCGetMemHandle,
+    SyclIPCOpenMemHandle,
     USMAllocationError,
     as_usm_memory,
 )
 
 __all__ = [
+    "IPCMemoryHandle",
+    "MemoryIPCDevice",
     "MemoryUSMDevice",
     "MemoryUSMHost",
     "MemoryUSMShared",
     "USMAllocationError",
     "as_usm_memory",
+    "SyclIPCGetMemHandle",
+    "SyclIPCOpenMemHandle",
+    "SyclIPCCloseMemHandle",
 ]

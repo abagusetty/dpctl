@@ -1,6 +1,6 @@
 #                      Data Parallel Control (dpctl)
 #
-# Copyright 2020-2025 Intel Corporation
+# Copyright 2020 Intel Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,7 +21,9 @@ file.
 
 """
 
+from . import utils
 from ._program import (
+    SpecializationConstant,
     SyclKernel,
     SyclKernelBundle,
     SyclKernelBundleCompilationError,
@@ -41,6 +43,12 @@ __all__ = [
     "SyclKernelBundleCompilationError",
     "SyclProgram",
     "SyclProgramCompilationError",
+    "SpecializationConstant",
+]
+
+# add submodules
+__all__ += [
+    "utils",
 ]
 
 

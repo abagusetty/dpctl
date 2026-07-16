@@ -2,7 +2,7 @@
 //
 //                      Data Parallel Control (dpctl)
 //
-// Copyright 2020-2025 Intel Corporation
+// Copyright 2020 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -133,7 +133,8 @@ typedef enum
     host_debuggable,
     emulated,
     is_component,
-    is_composite
+    is_composite,
+    ext_oneapi_ipc_memory
 } DPCTLSyclAspectType;
 
 /*!

@@ -1,6 +1,6 @@
 #                      Data Parallel Control (dpctl)
 #
-# Copyright 2020-2025 Intel Corporation
+# Copyright 2020 Intel Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -90,3 +90,12 @@ cdef public api class MemoryUSMDevice(_Memory) [
     object PyMemoryUSMDeviceObject, type PyMemoryUSMDeviceType
 ]:
     pass
+
+
+cdef class MemoryIPCDevice(MemoryUSMDevice):
+    @staticmethod
+    cdef object create_ipc_from_usm_pointer_size_qref(
+        DPCTLSyclUSMRef USMRef,
+        Py_ssize_t nbytes,
+        DPCTLSyclQueueRef QRef,
+    )

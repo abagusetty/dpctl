@@ -2,7 +2,7 @@
 //
 //                      Data Parallel Control (dpctl)
 //
-// Copyright 2020-2025 Intel Corporation
+// Copyright 2021 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -35,3 +35,5 @@
 
 #define DPCTL_LIBZE_LOADER_FILENAME "@LIBZE_LOADER_FILENAME@"
 #define DPCTL_LIBCL_LOADER_FILENAME "@LIBCL_LOADER_FILENAME@"
+/* Defined when the SYCL runtime supports IPC memory (ipc::memory API). */
+#cmakedefine DPCTL_HAS_IPC_MEMORY 1

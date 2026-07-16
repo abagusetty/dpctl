@@ -1,6 +1,6 @@
 #                      Data Parallel Control (dpctl)
 #
-# Copyright 2020-2025 Intel Corporation
+# Copyright 2020 Intel Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -63,7 +63,10 @@ cpdef create_kernel_bundle_from_source (
     SyclQueue q, unicode source, unicode copts=*
 )
 cpdef create_kernel_bundle_from_spirv (
-    SyclQueue q, const unsigned char[:] IL, unicode copts=*
+    SyclQueue q,
+    const unsigned char[:] IL,
+    unicode copts=*,
+    list specializations=*,
 )
 cpdef create_program_from_source (SyclQueue q, unicode source, unicode copts=*)
 cpdef create_program_from_spirv (

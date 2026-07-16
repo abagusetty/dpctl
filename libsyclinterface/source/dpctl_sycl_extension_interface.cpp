@@ -2,7 +2,7 @@
 //
 //                      Data Parallel Control (dpctl)
 //
-// Copyright 2020-2025 Intel Corporation
+// Copyright 2024 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -57,6 +57,16 @@ DPCTL_API
 bool DPCTLWorkGroupMemory_Available()
 {
 #ifdef SYCL_EXT_ONEAPI_WORK_GROUP_MEMORY
+    return true;
+#else
+    return false;
+#endif
+}
+
+DPCTL_API
+bool DPCTLIPCMem_Available()
+{
+#ifdef SYCL_EXT_ONEAPI_INTER_PROCESS_COMMUNICATION
     return true;
 #else
     return false;
